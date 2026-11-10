@@ -542,3 +542,51 @@ func TestChatTimes(t *testing.T) {
 		t.Errorf("a narrow chat shows times:\n%s", ansi.Strip(narrow))
 	}
 }
+
+// A long line of code wraps beside the bar, as the prose does, and keeps all its text: cut, a
+// draft to send or a command lost its end.
+func TestDrawMarkdownCodeWraps(t *testing.T) {
+	line := "олег, предлагаю разбить паритет на 7 подисторий supercalifragilisticexpialidocious 😀😀 end"
+	for _, w := range []int{5, 9, 24, 40} {
+		lines := drawMarkdown("```\n"+line+"\n```", w)
+		var got strings.Builder
+		for _, l := range lines {
+			l = ansi.Strip(l)
+			if ansi.StringWidth(l) > w || !strings.HasPrefix(l, "│ ") {
+				t.Errorf("w %d: line %q", w, l)
+			}
+			got.WriteString(strings.TrimPrefix(l, "│ "))
+		}
+		if strings.ReplaceAll(got.String(), " ", "") != strings.ReplaceAll(line, " ", "") {
+			t.Errorf("w %d: the code lost text: %q", w, got.String())
+		}
+		if len(lines) < 2 {
+			t.Errorf("w %d: the code did not wrap: %q", w, lines)
+		}
+	}
+	// A comment or a string goes on in its colour past the wrap: its words are not code there.
+	bar := styleRule.Render("│ ")
+	sgr := func(s string) string { return s[:strings.IndexByte(s, 'm')+1] }
+	for _, c := range []struct{ line, rest string }{
+		{"x := 1 // if the value is nil we return early from func", sgr(ideview.Highlight("// c", "go"))},
+		{`s := "for range if return else go func"`, sgr(ideview.Highlight(`"s"`, "go"))},
+	} {
+		lines := drawMarkdown("```go\n"+c.line+"\n```", 20)
+		if len(lines) < 3 {
+			t.Fatalf("%s: did not wrap: %q", c.line, lines)
+		}
+		for _, l := range lines[1:] {
+			part := strings.TrimPrefix(l, bar)
+			if !strings.HasPrefix(part, c.rest) || strings.Count(part, "\x1b[38") != 1 {
+				t.Errorf("%s: a part not in the colour it goes on in: %q", c.line, l)
+			}
+		}
+	}
+	// Too narrow to wrap, a line is cut as before, not spread over lines of nothing.
+	if lines := drawMarkdown("```\nabc def\n```", 3); len(lines) != 1 {
+		t.Errorf("w 3: %q", lines)
+	}
+	if lines := drawMarkdown("```\nab cd\n```", 4); len(lines) != 2 {
+		t.Errorf("w 4: %q", lines)
+	}
+}
