@@ -93,7 +93,7 @@ func (m *Model) slashCommand(text, cmd string) (done bool, run tea.Cmd) {
 	case cmd == "plugins" || cmd == "plugin":
 		return true, m.openPlugins()
 	case cmd == "btw":
-		m.btw(args)
+		m.btw(m.pastedTexts(args))
 	case args == "" && m.openPicker(cmd):
 	case cmd == "model" && args != "" && !m.Status.Replay && m.Status.State != "exited":
 		m.setModel(args)
@@ -266,7 +266,7 @@ func goalCondition(text string) string {
 }
 
 func (m *Model) echoGoal(text string) {
-	if goal := goalCondition(text); goal != "" {
+	if goal := goalCondition(m.pastedTexts(text)); goal != "" {
 		m.Chat = append(m.Chat, ChatEntry{Kind: CommandEntry, Text: "Goal set: " + goal, At: m.clock(), GoalEcho: true})
 	}
 }

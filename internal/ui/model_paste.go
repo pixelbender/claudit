@@ -18,8 +18,9 @@ import (
 	"github.com/pixelbender/claudit/internal/protocol"
 )
 
-// A long paste and a picture stay out of the prompt and the chat, as in Claude Code: a
-// placeholder stands for each, and message puts the texts back when the prompt goes to claude.
+// A long paste and a picture stay out of the prompt, as in Claude Code: a placeholder stands for
+// each, and message puts the texts back when the prompt goes to claude. Sent, the prompt shows
+// in the chat with the texts, as Claude Code shows it; a picture keeps its placeholder.
 const (
 	pasteChars = 800 // a paste longer than this many characters…
 	pasteLines = 2   // …or with more line breaks becomes [Pasted text #n +m lines]

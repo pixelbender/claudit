@@ -941,7 +941,7 @@ func (m *Model) prompt(text string) tea.Cmd {
 		return nil
 	}
 	if !isCmd {
-		m.Chat = append(m.Chat, ChatEntry{Kind: UserEntry, Text: text, At: m.clock()})
+		m.Chat = append(m.Chat, ChatEntry{Kind: UserEntry, Text: m.pastedTexts(text), At: m.clock()})
 	} else if !m.Status.Replay {
 		m.echoGoal(text)
 	}
@@ -974,8 +974,8 @@ func (m *Model) chatEntries() []ChatEntry {
 	}
 	for i, p := range m.pending {
 		if i != m.queueAt { // that one is in the prompt
-			e := ChatEntry{Kind: UserEntry, Text: p, Queued: true}
-			if goal := goalCondition(p); goal != "" {
+			e := ChatEntry{Kind: UserEntry, Text: m.pastedTexts(p), Queued: true}
+			if goal := goalCondition(e.Text); goal != "" {
 				e.Kind, e.Text = CommandEntry, "Goal set: "+goal
 			}
 			entries = append(entries, e)
@@ -1072,7 +1072,7 @@ func (m *Model) flush() {
 	}
 	for _, p := range m.pending[:n] {
 		if !isCmd { // a command goes alone and stays out of the chat
-			m.Chat = slices.Insert(m.Chat, at, ChatEntry{Kind: UserEntry, Text: p, At: m.clock()})
+			m.Chat = slices.Insert(m.Chat, at, ChatEntry{Kind: UserEntry, Text: m.pastedTexts(p), At: m.clock()})
 			at++
 		} else {
 			m.echoGoal(p)

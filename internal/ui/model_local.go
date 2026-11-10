@@ -260,7 +260,7 @@ func (*BtwPopup) isPopup() {}
 // and neither joins the conversation. The side questions answered before go along, for follow-ups.
 func (m *Model) btw(question string) {
 	switch {
-	case question == "":
+	case strings.TrimSpace(question) == "":
 		m.local("/btw <question>: ask while claude works, outside the conversation")
 	case m.Status.Replay:
 		m.local("replay: /btw is not available")

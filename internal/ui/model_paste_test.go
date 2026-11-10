@@ -58,8 +58,8 @@ func TestPasteLongTextStandsAsPlaceholder(t *testing.T) {
 	if len(*sent) != 1 || modelUserText((*sent)[0]) != "See "+long+strings.Repeat("x", pasteChars+1) {
 		t.Fatalf("sent %#v", *sent)
 	}
-	if got := m.Chat[len(m.Chat)-1].Text; got != "See [Pasted text #1 +3 lines][Pasted text #2]" {
-		t.Errorf("chat %q, want the placeholders", got)
+	if got := m.Chat[len(m.Chat)-1].Text; got != "See "+long+strings.Repeat("x", pasteChars+1) {
+		t.Errorf("chat %q, want the pasted texts", got)
 	}
 }
 
@@ -78,6 +78,19 @@ func TestPasteQueuedAndRecalledKeepTheirText(t *testing.T) {
 	modelEvents(m, protocol.Result{})
 	if len(*sent) != 2 || modelUserText((*sent)[1]) != "1\n2\n3\n4" {
 		t.Fatalf("sent %#v", *sent)
+	}
+	for _, e := range m.Chat {
+		if e.Kind == UserEntry && e.Text != "1\n2\n3\n4" {
+			t.Errorf("chat %q, want the pasted text", e.Text)
+		}
+	}
+	// Queued behind a turn, a prompt shows its text too; a picture keeps its placeholder.
+	m.Status.Busy = true
+	picture := m.attach(attachment{image: &protocol.Image{Media: "image/png", Data: []byte{0}}})
+	m.pending = []string{m.attach(attachment{text: "5\n6"}) + " " + picture}
+	entries := m.chatEntries()
+	if e := entries[len(entries)-1]; !e.Queued || e.Text != "5\n6 "+picture {
+		t.Errorf("queued %#v", e)
 	}
 }
 
@@ -308,5 +321,55 @@ func TestPastedTexts(t *testing.T) {
 	got := m.pastedTexts("cat " + text + " " + picture + " [Pasted text #9]")
 	if want := "cat one\ntwo [Image #2] [Pasted text #9]"; got != want {
 		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// A goal and a side question carry the pasted text too: the goal is shown as claude is told it,
+// and /btw asks what was pasted, not its placeholder.
+func TestPasteInGoalAndBtw(t *testing.T) {
+	for _, busy := range []bool{false, true} {
+		m, sent := modelNew(t, false)
+		m.addCommands([]protocol.Command{{Name: "goal"}})
+		m.Status.Busy = busy
+		modelPress(m, inputTyped("/goal ")...)
+		modelPasteRun(m, "fix\nthe\ntests\nnow")
+		modelPress(m, inputKey("enter"))
+		var shown string
+		for _, e := range m.chatEntries() {
+			if e.Kind == CommandEntry {
+				shown = e.Text
+			}
+		}
+		if want := "Goal set: " + tidy("fix\nthe\ntests\nnow"); shown != want {
+			t.Errorf("busy=%v: goal %q, want %q", busy, shown, want)
+		}
+		if busy {
+			modelEvents(m, protocol.Result{})
+		}
+		if len(*sent) != 1 || modelUserText((*sent)[0]) != "/goal fix\nthe\ntests\nnow" {
+			t.Errorf("busy=%v: sent %#v", busy, *sent)
+		}
+	}
+	m, sent := modelLocalNew(t)
+	m.Status.Busy = true
+	modelPress(m, inputTyped("/btw ")...)
+	modelPasteRun(m, "a\nb\nc\nd")
+	modelPress(m, inputKey("enter"))
+	if len(*sent) != 1 {
+		t.Fatalf("btw sent %#v", *sent)
+	}
+	if q, ok := (*sent)[0].(protocol.SideQuestion); !ok || q.Question != "a\nb\nc\nd" {
+		t.Errorf("btw sent %#v", *sent)
+	}
+	if p, ok := m.Popup.(*BtwPopup); !ok || p.Question != "a\nb\nc\nd" {
+		t.Errorf("btw popup %#v", m.Popup)
+	}
+	// A paste of nothing but blank lines asks nothing: /btw says how it is used.
+	m.Popup = nil
+	modelPress(m, inputTyped("/btw ")...)
+	modelPasteRun(m, "\n \n\n\n")
+	modelPress(m, inputKey("enter"))
+	if len(*sent) != 1 || m.Popup != nil {
+		t.Errorf("btw of blank lines: sent %#v popup %#v", *sent, m.Popup)
 	}
 }
