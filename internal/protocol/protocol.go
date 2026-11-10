@@ -89,6 +89,14 @@ type ModelFallback struct{ From, To, Trigger, Text string }
 // Compacting: the CLI is summarizing the conversation to free its context (On), or done with it.
 type Compacting struct{ On bool }
 
+// Compacted: the CLI replaced the conversation with its summary (Trigger "manual" for /compact,
+// "auto" when the context filled up). Before and After are the context's tokens either side of it:
+// what main's next call reads, until that call tells it again.
+type Compacted struct {
+	Trigger       string
+	Before, After int
+}
+
 // SideAnswer answers a SideQuestion.
 type SideAnswer struct{ RequestID, Text string }
 
@@ -253,6 +261,7 @@ func (ControlError) isEvent()      {}
 func (APIRetry) isEvent()          {}
 func (ModelFallback) isEvent()     {}
 func (Compacting) isEvent()        {}
+func (Compacted) isEvent()         {}
 func (SideAnswer) isEvent()        {}
 func (Reset) isEvent()             {}
 func (Commands) isEvent()          {}
@@ -428,8 +437,25 @@ func parseSystem(line []byte) []Event {
 		return parseAPIRetry(line)
 	case "model_fallback":
 		return parseModelFallback(line)
+	case "compact_boundary":
+		return parseCompactBoundary(line)
 	}
 	return nil
+}
+
+func parseCompactBoundary(line []byte) []Event {
+	var m struct {
+		Parent string `json:"parent_tool_use_id"`
+		Meta   struct {
+			Trigger string `json:"trigger"`
+			Pre     int    `json:"pre_tokens"`
+			Post    int    `json:"post_tokens"`
+		} `json:"compact_metadata"`
+	}
+	if json.Unmarshal(line, &m) != nil || m.Parent != "" { // a subagent's context is not main's
+		return nil
+	}
+	return []Event{Compacted{Trigger: m.Meta.Trigger, Before: m.Meta.Pre, After: m.Meta.Post}}
 }
 
 func parseAPIRetry(line []byte) []Event {

@@ -438,6 +438,14 @@ func (m *Model) handleEvent(ev protocol.Event) {
 		case state == "compacting": // the call that goes on with the turn is on its way
 			m.working("thinking")
 		}
+	case protocol.Compacted:
+		// No call of main tells the context until the next turn: the summary is what it holds now.
+		if ev.After > 0 {
+			m.context.Tokens = ev.After
+			m.context.Model = cmp.Or(m.context.Model, m.Status.Model) // a /compact before any call
+		}
+		// After what was said before it, as a fallback: the text before the compaction is done.
+		m.Chat = append(m.Chat, ChatEntry{Kind: CommandEntry, At: now, Text: compactedText(ev)})
 	case protocol.ModelFallback:
 		m.Status.Model = ev.To // until the next turn's Init names the model again
 		m.Sim.FindAgent("main").Model = ev.To
@@ -635,6 +643,27 @@ func retryState(r protocol.APIRetry) string {
 		why = "overloaded"
 	}
 	return fmt.Sprintf("%s · retry %d/%d", why, r.Attempt, r.MaxRetries)
+}
+
+// compactedText says a compaction happened, as Claude Code does, with what it freed:
+// "Conversation compacted · 166k → 7k tokens".
+func compactedText(ev protocol.Compacted) string {
+	text := "Conversation compacted"
+	if ev.Trigger == "auto" {
+		text = "Conversation compacted automatically"
+	}
+	if ev.Before > 0 && ev.After > 0 {
+		text += fmt.Sprintf(" · %s → %s tokens", kTokens(ev.Before), kTokens(ev.After))
+	}
+	return text
+}
+
+// kTokens is a token count in thousands, rounded: "166k"; under a thousand as it is.
+func kTokens(n int) string {
+	if n < 1000 {
+		return strconv.Itoa(n)
+	}
+	return fmt.Sprintf("%dk", (n+500)/1000)
 }
 
 // turnState is the status of a turn a prompt starts: "compacting" for /compact, "thinking" else.
