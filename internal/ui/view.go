@@ -49,7 +49,7 @@ func (m *Model) View() tea.View {
 	v.MouseMode = tea.MouseModeCellMotion
 	v.WindowTitle, v.ProgressBar = drawTitle(m.Status, m.Popup != nil)
 	w, h := m.Width, m.Height
-	m.zones, m.sel.text = nil, ""
+	m.zones, m.sel.text, m.chatView = nil, "", chatView{}
 	if m.tooSmall() {
 		m.onDrag = nil
 		v.SetContent(drawTooSmall(w, h))
@@ -124,7 +124,11 @@ func (m *Model) View() tea.View {
 	chat, chatMax, shown := renderChat(&m.chatLines, entries, w, chatH, m.ChatScroll)
 	m.chatMax = chatMax
 	if tw, _ := drawChatWidths(w); chatH > 0 { // the text past the "›", short of the times
-		m.zones = append(m.zones, zone{y: ideH, w: w, h: chatH,
+		m.chatView = chatView{box: image.Rect(2+chatTextCol, ideH, 2+tw, ideH+chatH), entries: entries, tw: tw, cache: &m.chatLines}
+		if m.sel.chat { // its box follows the chat's as the window's height changes
+			m.sel.box = m.chatView.box
+		}
+		m.zones = append(m.zones, zone{y: ideH, w: w, h: chatH, chat: true,
 			click: func(_, y int) tea.Cmd {
 				call := "" // a Bash line's: a click shows where it ran
 				if i := shown[y]; i >= 0 {
@@ -132,7 +136,7 @@ func (m *Model) View() tea.View {
 				}
 				return m.clickChat(call, o, w, ideH)
 			},
-			text: func(int, int) image.Rectangle { return image.Rect(4, 0, 2+tw, chatH) }})
+			text: func(int, int) image.Rectangle { return image.Rect(2+chatTextCol, 0, 2+tw, chatH) }})
 	}
 	in, cx := renderInput(&m.Input, w-4, "Ask claude…", m.PanelFocus)
 	var parts []string
@@ -177,14 +181,28 @@ func (m *Model) View() tea.View {
 	case !m.PanelFocus: // the keys go to the agents panel: no caret in the prompt
 		v.Cursor = tea.NewCursor(2+cx, ideH+chatH+1)
 	}
-	selecting := m.sel.drag && m.sel.out(m.Now) < 1 && m.Popup == nil && !m.ShowHelp
-	if len(under) == 1 && over == nil && !selecting {
+	selecting := m.sel.drag && m.sel.out(m.Now) < 1 && m.Popup == nil && !m.ShowHelp &&
+		!(m.sel.chat && m.chatView.box.Empty()) // the chat gone from the screen: nothing of it to light
+	promptAll := m.Input.all && len(m.Input.Text) > 0 && m.Popup == nil && !m.ShowHelp
+	if len(under) == 1 && over == nil && !selecting && !promptAll {
 		v.SetContent(drawBlock(base, w, h))
 		return v
 	}
 	c := lipgloss.NewCanvas(w, h).Compose(lipgloss.NewCompositor(under...))
 	if selecting {
-		m.sel.text = drawSelection(c, m.sel, m.sel.lit(m.Now), m.sel.out(m.Now))
+		shift := 0 // the chat's rows are lines of the conversation: on screen as it is scrolled
+		if m.sel.chat {
+			shift = m.chatView.box.Min.Y - m.chatTop()
+		}
+		m.sel.text = drawSelection(c, m.sel, m.sel.lit(m.Now), m.sel.out(m.Now), shift)
+	}
+	if promptAll { // its text past the "› ", in the box's rows; a shell command's "!" with it
+		x := 4
+		if bangInput(m.Input.Text) {
+			x = 2
+		}
+		b := image.Rect(x, ideH+chatH+1, w-2, ideH+chatH+2)
+		drawSelection(c, selection{box: b, from: b.Min, to: b.Max.Sub(image.Pt(1, 1))}, theme.SelBg, 0, 0)
 	}
 	if m.Popup != nil || m.ShowHelp {
 		drawDim(c)
@@ -220,20 +238,13 @@ func drawDim(c *lipgloss.Canvas) {
 // drawSelection lights the cells of c that s covers in lit, from where the drag began to where it
 // is in reading order within its box, out of 1 gone out, and returns their text: a line per row,
 // without trailing blanks. A row is lit as far as its text goes: its blanks after it stay dark.
-func drawSelection(c *lipgloss.Canvas, s selection, lit color.Color, out float64) string {
-	from, to := s.from, s.to
-	if to.Y < from.Y || to.Y == from.Y && to.X < from.X {
-		from, to = to, from
-	}
+// Row y of s is row y+shift of c; the rows off its box stay out.
+func drawSelection(c *lipgloss.Canvas, s selection, lit color.Color, out float64, shift int) string {
+	from, to := s.ends()
 	var rows []string
-	for y := from.Y; y <= to.Y; y++ {
-		x0, x1 := s.box.Min.X, s.box.Max.X
-		if y == from.Y {
-			x0 = from.X
-		}
-		if y == to.Y {
-			x1 = to.X + 1
-		}
+	for y := max(from.Y, s.box.Min.Y-shift); y <= min(to.Y, s.box.Max.Y-1-shift); y++ {
+		x0, x1 := s.span(y)
+		y := y + shift
 		end := x0 // past the row's last character
 		for x := x0; x < x1; x++ {
 			if cell := c.CellAt(x, y); cell != nil && strings.TrimSpace(cell.Content) != "" {

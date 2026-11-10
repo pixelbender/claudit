@@ -54,6 +54,7 @@ type Model struct {
 
 	chatMax    int               // largest useful ChatScroll, written by View
 	chatLines  chatCache         // drawn chat entries, kept by View
+	chatView   chatView          // the chat as the last frame drew it, written by View
 	zones      []zone            // what clicks act on, written by View
 	sel        selection         // the text the mouse drags over; View writes what it covers
 	scroll     ideview.Scroll    // how far the wheel scrolled the IDE's panes; View forgets those it no longer draws
@@ -62,6 +63,7 @@ type Model struct {
 	inspection *inspection       // the IDE the user is reading during the interaction cooldown
 	ideHeight  int               // IDE height in the last frame; -1 before the first frame
 	mouseDown  bool              // a held button protects the view until five seconds after release
+	selTick    bool              // a drag held past the chat's edge scrolls it: a frame of it is on the way
 	send       func(protocol.Outbound)
 	queue      []Popup          // requests waiting behind the open popup
 	behind     string           // the state of main while "waiting for you" covers it
@@ -254,6 +256,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.onDrag = nil
+		if m.sel.chat && msg.Width != m.Width { // its lines wrap anew: what it held is gone
+			m.sel = selection{}
+		}
 		m.Width, m.Height = msg.Width, msg.Height
 	case tickMsg:
 		m.tick(time.Time(msg))
@@ -298,6 +303,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.interact()
 			m.mouseDown = true
 			m.onDrag = nil
+			m.Input.all = false
 			m.sel = m.selectAt(msg.X, msg.Y)
 			cmd = m.click(msg.X, msg.Y)
 		}
@@ -308,8 +314,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.onDrag(msg.X, msg.Y)
 			} else {
 				m.dragTo(msg.X, msg.Y)
+				cmd = m.holdSelScroll()
 			}
 		}
+	case selScrollMsg:
+		cmd = m.selScroll()
 	case tea.MouseReleaseMsg:
 		m.onDrag = nil
 		if m.mouseDown {
@@ -750,6 +759,8 @@ func (m *Model) working(state string) {
 }
 
 func (m *Model) handleKey(k tea.KeyPressMsg) tea.Cmd {
+	all := m.Input.all
+	m.Input.all = false // a key drops the selection of the whole prompt; cmd+a, typing and deleting act on it
 	if k.String() == "ctrl+c" {
 		if _, ok := m.Popup.(*QuitPopup); ok {
 			m.cancelQuit()
@@ -820,6 +831,9 @@ func (m *Model) handleKey(k tea.KeyPressMsg) tea.Cmd {
 			m.histAt = len(m.history) // an edit ends browsing the history
 		}
 	}()
+	if all && m.Input.takeAll(k) {
+		return nil
+	}
 	switch k.String() {
 	case "enter":
 		if c := m.Input.Cursor; c > 0 && m.Input.Text[c-1] == '\\' { // "\" + enter: a new line
@@ -863,6 +877,18 @@ func (m *Model) handleKey(k tea.KeyPressMsg) tea.Cmd {
 		default: // nothing left to cancel
 			return m.quitTwice("esc")
 		}
+	case "ctrl+a": // the start, as in a shell; cmux sends it for cmd+left too
+		if len(m.Input.Text) == 0 { // nothing to go to the start of: the whole conversation
+			return m.selectChat()
+		}
+		m.Input.edit(k)
+	case "super+a": // cmd+a: the whole prompt, selected and copied, as in a text field
+		if len(m.Input.Text) == 0 {
+			return nil
+		}
+		m.Input.all = true
+		m.sel = selection{released: m.clock()} // nothing to light in the chat: the status line notes the copy
+		return copyText(m.pastedTexts(string(m.Input.Text)))
 	case "pgup":
 		m.scrollChat(10)
 	case "pgdown":

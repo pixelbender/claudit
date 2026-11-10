@@ -431,7 +431,7 @@ func TestModelMouseSelect(t *testing.T) {
 func TestDrawSelectionEndsWithText(t *testing.T) {
 	c := lipgloss.NewCanvas(10, 3).Compose(lipgloss.NewCompositor(lipgloss.NewLayer("ab\n\nd世")))
 	s := selection{box: image.Rect(0, 0, 10, 3), from: image.Pt(1, 0), to: image.Pt(9, 2), drag: true}
-	if got := drawSelection(c, s, theme.SelBg, 0); got != "b\n\nd世" {
+	if got := drawSelection(c, s, theme.SelBg, 0, 0); got != "b\n\nd世" {
 		t.Errorf("text %q", got)
 	}
 	for y, want := range []string{".#........", "..........", "###......."} {
@@ -628,5 +628,647 @@ func TestModelMouseClickBash(t *testing.T) {
 	screen := ansi.Strip(m.View().Content)
 	if !strings.Contains(screen, "# Run the tests") || !strings.Contains(screen, "go test ./...") {
 		t.Errorf("the terminal does not show the call:\n%s", screen)
+	}
+}
+
+// modelMouseLines is a chat of n lines "line 00" on, drawn.
+func modelMouseLines(t *testing.T, n int) *Model {
+	t.Helper()
+	m, _ := modelMouseNew(t)
+	for i := range n {
+		m.Chat = append(m.Chat, ChatEntry{Kind: AssistantEntry, Text: fmt.Sprintf("line %02d", i)})
+	}
+	m.View()
+	return m
+}
+
+// modelMouseLinesText is the text of lines "line from" to "line to", as a selection of them whole
+// copies it: past the arrow of the first.
+func modelMouseLinesText(from, to int) string {
+	var rows []string
+	for i := from; i <= to; i++ {
+		rows = append(rows, fmt.Sprintf("line %02d", i))
+	}
+	return strings.Join(rows, "\n")
+}
+
+// A drag held below the chat scrolls it down a frame at a time, the farther below the faster, and
+// the selection takes in the lines that come up; let go, the scroll stops and the copy holds every
+// line dragged over, those scrolled off too.
+func TestModelMouseSelectScrollsDown(t *testing.T) {
+	m := modelMouseLines(t, 60)
+	m.scrollChat(30)
+	m.View()
+	b := m.chatView.box
+	x, y := modelMouseAt(t, m, "line 20")
+	m.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+	m.View()
+	if _, cmd := m.Update(tea.MouseMotionMsg{X: x + 30, Y: b.Max.Y, Button: tea.MouseLeft}); cmd == nil {
+		t.Fatal("held below the chat, no scroll started")
+	}
+	// Another motion past the edge starts no second scroll: one frame is on the way.
+	if _, cmd := m.Update(tea.MouseMotionMsg{X: x + 30, Y: b.Max.Y, Button: tea.MouseLeft}); cmd != nil {
+		t.Error("a second scroll started")
+	}
+	for range 3 {
+		m.View()
+		if _, cmd := m.Update(selScrollMsg{}); cmd == nil {
+			t.Fatal("the scroll stopped while held")
+		}
+	}
+	if m.ChatScroll != 27 {
+		t.Errorf("a line a frame: scrolled %d, want 27", m.ChatScroll)
+	}
+	m.Update(tea.MouseMotionMsg{X: x + 30, Y: b.Max.Y + 2, Button: tea.MouseLeft})
+	m.View()
+	m.Update(selScrollMsg{})
+	if m.ChatScroll != 24 {
+		t.Errorf("three rows below, three lines a frame: scrolled %d, want 24", m.ChatScroll)
+	}
+	m.View()
+	last := 60 - 1 - m.ChatScroll // on the chat's bottom row
+	if got, want := m.selText(), modelMouseLinesText(20, last); got != want {
+		t.Errorf("held: %q, want %q", got, want)
+	}
+	m.Update(tea.MouseReleaseMsg{X: x + 30, Y: b.Max.Y + 2, Button: tea.MouseLeft})
+	if _, cmd := m.Update(selScrollMsg{}); cmd != nil || m.ChatScroll != 24 {
+		t.Errorf("let go: scroll goes on %v, scrolled %d", cmd != nil, m.ChatScroll)
+	}
+	if got, want := m.selText(), modelMouseLinesText(20, last); got != want {
+		t.Errorf("copied %q, want %q", got, want)
+	}
+}
+
+// A drag held above the chat, over the IDE, scrolls it up; back inside, the scroll stops.
+func TestModelMouseSelectScrollsUp(t *testing.T) {
+	m := modelMouseLines(t, 60)
+	b := m.chatView.box
+	x, y := modelMouseAt(t, m, "line 55")
+	m.Update(tea.MouseClickMsg{X: x + 7, Y: y, Button: tea.MouseLeft})
+	m.View()
+	m.Update(tea.MouseMotionMsg{X: 0, Y: b.Min.Y - 1, Button: tea.MouseLeft})
+	for range 4 {
+		m.View()
+		m.Update(selScrollMsg{})
+	}
+	if m.ChatScroll != 4 {
+		t.Errorf("scrolled %d, want 4", m.ChatScroll)
+	}
+	first := 60 - m.ChatScroll - b.Dy() // on the chat's top row
+	if got, want := m.selText(), modelMouseLinesText(first, 54)+"\nline 55"; got != want {
+		t.Errorf("%q, want %q", got, want)
+	}
+	m.Update(tea.MouseMotionMsg{X: x, Y: b.Min.Y + 1, Button: tea.MouseLeft})
+	m.View()
+	if _, cmd := m.Update(selScrollMsg{}); cmd != nil || m.ChatScroll != 4 {
+		t.Errorf("back inside: scroll goes on %v, scrolled %d", cmd != nil, m.ChatScroll)
+	}
+}
+
+// The wheel turned during a drag scrolls the chat under it: the selection's end stays under the
+// mouse and takes in what came up.
+func TestModelMouseSelectWheel(t *testing.T) {
+	m := modelMouseLines(t, 60)
+	x, y := modelMouseAt(t, m, "line 50")
+	m.Update(tea.MouseClickMsg{X: x + 6, Y: y, Button: tea.MouseLeft})
+	m.Update(tea.MouseMotionMsg{X: x, Y: y, Button: tea.MouseLeft})
+	m.View()
+	m.Update(tea.MouseWheelMsg{X: x, Y: y, Button: tea.MouseWheelUp})
+	m.View()
+	if got, want := m.selText(), modelMouseLinesText(47, 50); got != want {
+		t.Errorf("%q, want %q", got, want)
+	}
+}
+
+// modelSelectChat presses ctrl+a on the empty prompt: it selects the whole conversation and copies it.
+func modelSelectChat(m *Model) tea.Cmd {
+	return m.handleKey(inputKey("ctrl+a"))
+}
+
+// With the prompt empty, ctrl+a selects the whole conversation, lit where it shows, and copies it
+// whole, the lines scrolled off too; a short chat is lit on the rows of its text, not the blanks
+// over it. No conversation: nothing to select.
+func TestModelMouseSelectWholeChat(t *testing.T) {
+	m := modelMouseLines(t, 60)
+	if cmd := modelSelectChat(m); cmd == nil {
+		t.Fatal("nothing copied")
+	}
+	if got, want := m.selText(), modelMouseLinesText(0, 59); got != want {
+		t.Errorf("copied %q, want %q", got, want)
+	}
+	r, g, bl, _ := selFlashBg.RGBA() // copied: it flashes
+	lit := fmt.Sprintf("48;2;%d;%d;%d", r>>8, g>>8, bl>>8)
+	_, y := modelMouseAt(t, m, "line 59")
+	if rows := strings.Split(m.View().Content, "\n"); !strings.Contains(rows[y], lit) {
+		t.Error("the last line is not lit")
+	}
+
+	m, _ = modelMouseNew(t)
+	m.Chat = []ChatEntry{{Kind: UserEntry, Text: "fix the bug"}, {Kind: AssistantEntry, Text: "done"}}
+	m.View()
+	modelSelectChat(m)
+	if got := m.selText(); got != "fix the bug\ndone" {
+		t.Errorf("short chat: %q", got)
+	}
+	v := strings.Split(m.View().Content, "\n")
+	_, y = modelMouseAt(t, m, "fix the bug")
+	if !strings.Contains(v[y], lit) || strings.Contains(v[y-1], lit) {
+		t.Errorf("short chat lit on rows %d and %d: %v %v", y-1, y, strings.Contains(v[y-1], lit), strings.Contains(v[y], lit))
+	}
+
+	m, _ = modelMouseNew(t)
+	m.View()
+	if cmd := modelSelectChat(m); cmd != nil || m.sel.drag {
+		t.Errorf("empty chat: copy %v, selecting %v", cmd != nil, m.sel.drag)
+	}
+}
+
+// cmd+a selects the whole prompt, lit, and copies it, its pasted texts in place of their
+// placeholders; typing then replaces it, a key that deletes clears it (ctrl+y puts it back), a
+// paste goes in place of it, and another key acts as with nothing selected. An empty prompt has
+// nothing to select.
+func TestModelPromptSelectAll(t *testing.T) {
+	m, _ := modelMouseNew(t)
+	m.Chat = []ChatEntry{{Kind: AssistantEntry, Text: "done"}}
+	if cmd := m.handleKey(inputKey("super+a")); cmd != nil || m.Input.all {
+		t.Errorf("empty prompt: copy %v, selected %v", cmd != nil, m.Input.all)
+	}
+	m.paste(strings.Repeat("pasted line\n", 12))
+	modelPress(m, inputTyped(" fix it")...)
+	text := string(m.Input.Text)
+	if !strings.HasPrefix(text, "[Pasted text #") {
+		t.Fatalf("no placeholder: %q", text)
+	}
+	if got := m.pastedTexts(text); !strings.HasPrefix(got, "pasted line\npasted line") {
+		t.Fatalf("pasted texts: %q", got)
+	}
+	var copied string
+	defer func(w func(string) error) { writeClipboard = w }(writeClipboard)
+	writeClipboard = func(s string) error { copied = s; return nil }
+	cmd := m.handleKey(inputKey("super+a"))
+	if cmd == nil || !m.Input.all {
+		t.Fatalf("copy %v, selected %v", cmd != nil, m.Input.all)
+	}
+	if cmd(); copied != m.pastedTexts(text) {
+		t.Errorf("copied %q", copied)
+	}
+	r, g, bl, _ := theme.SelBg.RGBA()
+	lit := fmt.Sprintf("48;2;%d;%d;%d", r>>8, g>>8, bl>>8)
+	v := m.View()
+	_, y := modelMouseAt(t, m, "fix it")
+	if rows := strings.Split(v.Content, "\n"); !strings.Contains(rows[y], lit) || !strings.Contains(ansi.Strip(v.Content), "copied to clipboard") {
+		t.Errorf("prompt lit %v, noted %v", strings.Contains(rows[y], lit), strings.Contains(ansi.Strip(v.Content), "copied to clipboard"))
+	}
+
+	modelPress(m, inputTyped("new")...)
+	if got := string(m.Input.Text); got != "new" || m.Input.all || m.Input.Cursor != 3 {
+		t.Errorf("typed over: %q cursor %d selected %v", got, m.Input.Cursor, m.Input.all)
+	}
+	if strings.Contains(m.View().Content, lit) {
+		t.Error("lit after typing")
+	}
+
+	for _, key := range []string{"backspace", "delete", "ctrl+u", "ctrl+k", "ctrl+w"} {
+		m.handleKey(inputKey("super+a"))
+		m.handleKey(inputKey(key))
+		if len(m.Input.Text) != 0 || m.Input.all {
+			t.Errorf("%s: %q selected %v", key, string(m.Input.Text), m.Input.all)
+		}
+		modelPress(m, inputKeys("ctrl+y")...)
+		if got := string(m.Input.Text); got != "new" {
+			t.Errorf("%s then ctrl+y: %q", key, got)
+		}
+	}
+
+	m.Input = Input{Text: []rune("fresh"), Cursor: 5} // nothing killed yet
+	m.handleKey(inputKey("super+a"))
+	m.Update(tea.PasteMsg{Content: "pasted"})
+	if got := string(m.Input.Text); got != "pasted" || m.Input.all {
+		t.Errorf("paste: %q selected %v", got, m.Input.all)
+	}
+	m.handleKey(inputKey("ctrl+y"))
+	if got := string(m.Input.Text); got != "pastedfresh" {
+		t.Errorf("paste then ctrl+y: %q", got)
+	}
+	m.Input = Input{Text: []rune("pasted"), Cursor: 6}
+
+	m.handleKey(inputKey("super+a"))
+	m.handleKey(inputKey("left"))
+	if got := string(m.Input.Text); got != "pasted" || m.Input.all || m.Input.Cursor != 5 {
+		t.Errorf("left: %q cursor %d selected %v", got, m.Input.Cursor, m.Input.all)
+	}
+}
+
+// With text in the prompt ctrl+a goes to its start, as in a shell, and selects nothing, neither the
+// prompt nor the conversation: cmux sends it for cmd+left as well.
+func TestModelPromptCtrlAGoesToStart(t *testing.T) {
+	m, _ := modelMouseNew(t)
+	m.Chat = []ChatEntry{{Kind: AssistantEntry, Text: "done"}}
+	m.View()
+	m.Input = Input{Text: []rune("fix it"), Cursor: 6}
+	if cmd := m.handleKey(inputKey("ctrl+a")); cmd != nil || m.Input.all || m.sel.drag || m.Input.Cursor != 0 {
+		t.Errorf("copy %v, selected %v, chat selected %v, cursor %d", cmd != nil, m.Input.all, m.sel.drag, m.Input.Cursor)
+	}
+	modelPress(m, inputTyped("x")...)
+	if got := string(m.Input.Text); got != "xfix it" {
+		t.Errorf("typed at the start: %q", got)
+	}
+	m.handleKey(inputKey("super+a"))
+	m.handleKey(inputKey("ctrl+a"))
+	if got := string(m.Input.Text); got != "xfix it" || m.Input.all || m.Input.Cursor != 0 {
+		t.Errorf("cmd+a then ctrl+a: %q selected %v cursor %d", got, m.Input.all, m.Input.Cursor)
+	}
+}
+
+// With the IDE gone from a low window, the chat starts at the top of the screen: a drag held on its
+// top row scrolls it up.
+func TestModelMouseSelectScrollsUpTopRow(t *testing.T) {
+	m := modelMouseLines(t, 60)
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 12})
+	m.View()
+	if b := m.chatView.box; b.Min.Y != 0 {
+		t.Fatalf("the chat starts on row %d", b.Min.Y)
+	}
+	x, y := modelMouseAt(t, m, "line 57")
+	m.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+	m.Update(tea.MouseMotionMsg{X: x, Y: 1, Button: tea.MouseLeft})
+	m.View()
+	if _, cmd := m.Update(tea.MouseMotionMsg{X: x, Y: 0, Button: tea.MouseLeft}); cmd == nil {
+		t.Fatal("on the top row, no scroll started")
+	}
+	m.View()
+	m.Update(selScrollMsg{})
+	if m.ChatScroll != 1 {
+		t.Errorf("scrolled %d, want 1", m.ChatScroll)
+	}
+}
+
+// Far above the chat, a frame scrolls at most selScrollMax lines; at the top, the scroll stops.
+func TestModelMouseSelectScrollsUpFast(t *testing.T) {
+	m := modelMouseLines(t, 30)
+	b := m.chatView.box
+	if b.Min.Y <= selScrollMax {
+		t.Fatalf("the chat starts on row %d: no room above it", b.Min.Y)
+	}
+	x, y := modelMouseAt(t, m, "line 29")
+	m.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+	m.Update(tea.MouseMotionMsg{X: x, Y: 0, Button: tea.MouseLeft})
+	m.View()
+	m.Update(selScrollMsg{})
+	if m.ChatScroll != selScrollMax {
+		t.Errorf("scrolled %d, want %d", m.ChatScroll, selScrollMax)
+	}
+	m.View()
+	if _, cmd := m.Update(selScrollMsg{}); cmd == nil || m.ChatScroll != m.chatMax {
+		t.Fatalf("to the top: scrolled %d of %d, goes on %v", m.ChatScroll, m.chatMax, cmd != nil)
+	}
+	m.View()
+	if _, cmd := m.Update(selScrollMsg{}); cmd != nil {
+		t.Error("at the top, the scroll goes on")
+	}
+	if got := m.selText(); got != modelMouseLinesText(0, 28)+"\nl" {
+		t.Errorf("%q", got)
+	}
+}
+
+// The wheel turned over the IDE during a drag in the chat scrolls the chat, not the pane.
+func TestModelMouseSelectWheelOverIDE(t *testing.T) {
+	m := modelMouseLines(t, 60)
+	x, y := modelMouseAt(t, m, "line 59")
+	m.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+	m.Update(tea.MouseMotionMsg{X: 5, Y: 5, Button: tea.MouseLeft})
+	m.View()
+	m.Update(tea.MouseWheelMsg{X: 5, Y: 5, Button: tea.MouseWheelUp})
+	if m.ChatScroll != wheelStep || len(m.scroll) != 0 {
+		t.Errorf("chat scrolled %d, panes %v", m.ChatScroll, m.scroll)
+	}
+}
+
+// The window lowered during a drag: the chat may leave the screen, or nothing shows, too small;
+// the drag goes on, and the release copies what it held if the chat shows it, else nothing. Back
+// to its height, the chat shows it again. Narrower, the lines wrap anew: the selection goes.
+func TestModelMouseSelectResized(t *testing.T) {
+	for _, size := range [][2]int{{100, 20}, {100, 16}, {100, 6}, {100, 30}} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			m := modelMouseLines(t, 60)
+			x, y := modelMouseAt(t, m, "line 58")
+			m.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+			m.Update(tea.MouseMotionMsg{X: x + 6, Y: y + 1, Button: tea.MouseLeft})
+			m.View()
+			m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+			m.View()
+			m.Update(tea.MouseMotionMsg{X: 99, Y: size[1] - 1, Button: tea.MouseLeft})
+			m.Update(selScrollMsg{})
+			m.View()
+			shown := !m.chatView.box.Empty()
+			m.Update(tea.MouseReleaseMsg{X: 99, Y: size[1] - 1, Button: tea.MouseLeft})
+			if got, want := m.selText(), map[bool]string{true: "line 58\nline 59", false: ""}[shown]; got != want {
+				t.Errorf("chat shown %v: copied %q, want %q", shown, got, want)
+			}
+			if size[1] == 30 && !shown {
+				t.Error("the chat is not back")
+			}
+		})
+	}
+	m := modelMouseLines(t, 60)
+	x, y := modelMouseAt(t, m, "line 58")
+	m.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+	m.Update(tea.MouseMotionMsg{X: x + 6, Y: y + 1, Button: tea.MouseLeft})
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 30})
+	if _, cmd := m.Update(tea.MouseReleaseMsg{X: x, Y: y, Button: tea.MouseLeft}); cmd != nil || m.sel.drag {
+		t.Errorf("narrower: copy %v, selecting %v", cmd != nil, m.sel.drag)
+	}
+}
+
+// A popup over a drag held past the chat stops its scroll, and the release copies nothing: the
+// popup hid it.
+func TestModelMouseSelectUnderPopup(t *testing.T) {
+	m := modelMouseLines(t, 60)
+	m.scrollChat(20)
+	m.View()
+	x, y := modelMouseAt(t, m, "line 35")
+	m.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+	m.Update(tea.MouseMotionMsg{X: x, Y: m.chatView.box.Max.Y, Button: tea.MouseLeft})
+	modelEvents(m, protocol.PermissionRequest{RequestID: "p", ToolName: "Bash", Input: map[string]any{"command": "ls"}})
+	m.View()
+	if _, cmd := m.Update(selScrollMsg{}); cmd != nil || m.ChatScroll != 20 {
+		t.Errorf("under the popup: scroll goes on %v, scrolled %d", cmd != nil, m.ChatScroll)
+	}
+	if _, cmd := m.Update(tea.MouseReleaseMsg{X: x, Y: y, Button: tea.MouseLeft}); cmd != nil {
+		t.Error("the release copied")
+	}
+}
+
+// Over a short chat the rows are blank: a drag from one takes its first line from the start. In
+// a chat with nothing in it, a drag copies nothing.
+func TestModelMouseSelectShortChat(t *testing.T) {
+	m, _ := modelMouseNew(t)
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 14})
+	m.Chat = []ChatEntry{{Kind: AssistantEntry, Text: "first line of the reply here"}, {Kind: AssistantEntry, Text: "second"}}
+	_, y := modelMouseAt(t, m, "first line")
+	if b := m.chatView.box; b.Min.Y >= y {
+		t.Fatalf("no blank row over the chat: it starts on %d, the text on %d", b.Min.Y, y)
+	}
+	m.Update(tea.MouseClickMsg{X: 20, Y: m.chatView.box.Min.Y, Button: tea.MouseLeft})
+	m.Update(tea.MouseMotionMsg{X: 99, Y: y + 1, Button: tea.MouseLeft})
+	m.View()
+	if got := m.selText(); got != "first line of the reply here\nsecond" {
+		t.Errorf("%q", got)
+	}
+
+	m, _ = modelMouseNew(t)
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 14})
+	m.View()
+	if m.chatView.box.Empty() {
+		t.Fatal("no chat on screen")
+	}
+	b := m.chatView.box
+	m.Update(tea.MouseClickMsg{X: b.Min.X, Y: b.Min.Y, Button: tea.MouseLeft})
+	m.Update(tea.MouseMotionMsg{X: b.Max.X - 1, Y: b.Max.Y - 1, Button: tea.MouseLeft})
+	m.View()
+	if _, cmd := m.Update(tea.MouseReleaseMsg{X: b.Max.X - 1, Y: b.Max.Y - 1, Button: tea.MouseLeft}); cmd != nil {
+		t.Error("an empty chat copied")
+	}
+}
+
+// The whole conversation copies a prompt that wraps a row per row, without its time.
+func TestModelMouseSelectWrapped(t *testing.T) {
+	m, _ := modelMouseNew(t)
+	long := strings.Repeat("word ", 30)
+	m.Chat = []ChatEntry{{Kind: UserEntry, Text: long, At: modelT0}}
+	m.View()
+	modelSelectChat(m)
+	got := m.selText()
+	if rows := strings.Split(got, "\n"); len(rows) < 2 || strings.Contains(got, modelT0.Format("15:04")) ||
+		strings.Join(strings.Fields(got), " ") != strings.TrimSpace(long) {
+		t.Errorf("%q", got)
+	}
+}
+
+// A character is taken by the column it starts on, a wide one whole, as the screen lights it.
+func TestSelCut(t *testing.T) {
+	line := "ab世界" + styleDim.Render("cd你好") + "ef"
+	for _, c := range []struct {
+		x0, x1 int
+		want   string
+	}{{0, 2, "ab"}, {3, 5, "界"}, {2, 4, "世"}, {2, 6, "世界"}, {7, 11, "d你好"}, {12, 99, "ef"}, {50, 60, ""}} {
+		if got := selCut(line, c.x0, c.x1); got != c.want {
+			t.Errorf("[%d, %d): %q, want %q", c.x0, c.x1, got, c.want)
+		}
+	}
+	// Measured as the screen measures them: a keycap takes two columns, a Thai letter with its
+	// mark one.
+	for _, c := range [][2]string{{"1️⃣ab", "a"}, {"กำab", "a"}} {
+		if got := selCut(c[0], ansi.StringWidth(c[0])-2, ansi.StringWidth(c[0])-1); got != c[1] {
+			t.Errorf("%q: %q, want %q", c[0], got, c[1])
+		}
+	}
+}
+
+// The chat gone from the screen during a drag and back, the selection holds what it held.
+func TestModelMouseSelectChatBack(t *testing.T) {
+	m := modelMouseLines(t, 60)
+	x, y := modelMouseAt(t, m, "line 58")
+	m.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+	m.Update(tea.MouseMotionMsg{X: 99, Y: y + 1, Button: tea.MouseLeft})
+	m.View()
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 16})
+	if m.View(); !m.chatView.box.Empty() {
+		t.Fatal("the chat stays on screen")
+	}
+	m.Update(tea.MouseMotionMsg{X: 3, Y: 3, Button: tea.MouseLeft})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m.View()
+	m.Update(tea.MouseReleaseMsg{X: 3, Y: 3, Button: tea.MouseLeft})
+	if got := m.selText(); got != "line 58\nline 59" {
+		t.Errorf("%q", got)
+	}
+}
+
+// The window lowered during a drag, the chat takes fewer rows: what it selects past them is lit
+// nowhere else, the prompt under it least of all.
+func TestModelMouseSelectLowered(t *testing.T) {
+	m := modelMouseLines(t, 60)
+	m.scrollChat(20)
+	m.View()
+	b := m.chatView.box
+	x, y := modelMouseAt(t, m, "line 30")
+	m.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+	m.Update(tea.MouseMotionMsg{X: 99, Y: b.Max.Y - 1, Button: tea.MouseLeft})
+	m.View()
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 26})
+	v := m.View().Content
+	r, g, bl, _ := theme.SelBg.RGBA()
+	lit := fmt.Sprintf("48;2;%d;%d;%d", r>>8, g>>8, bl>>8)
+	rows := strings.Split(v, "\n")
+	for y := m.chatView.box.Max.Y; y < len(rows); y++ {
+		if strings.Contains(rows[y], lit) {
+			t.Errorf("row %d under the chat is lit: %q", y, ansi.Strip(rows[y]))
+		}
+	}
+	if !strings.Contains(v, lit) {
+		t.Error("nothing lit")
+	}
+}
+
+// A line's blanks after its text stay out of the copy: a code block pads its lines.
+func TestModelMouseSelectTrims(t *testing.T) {
+	m, _ := modelMouseNew(t)
+	m.Chat = []ChatEntry{{Kind: AssistantEntry, Text: "```\nx := 1\nlonger := 2\n```"}}
+	m.View()
+	if modelSelectChat(m) == nil || !strings.Contains(m.selText(), "longer := 2") {
+		t.Fatalf("nothing selected: %q", m.selText())
+	}
+	for _, row := range strings.Split(m.selText(), "\n") {
+		if strings.HasSuffix(row, " ") {
+			t.Errorf("%q ends in blanks", row)
+		}
+	}
+}
+
+// The window raised with the whole conversation selected, the chat takes more rows: it is lit on
+// every one of them.
+func TestModelMouseSelectRaised(t *testing.T) {
+	m := modelMouseLines(t, 60)
+	modelSelectChat(m)
+	before := m.chatView.box
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 50})
+	rows := strings.Split(m.View().Content, "\n")
+	b := m.chatView.box
+	if b.Dy() <= before.Dy() {
+		t.Fatalf("the chat took %d rows, before %d", b.Dy(), before.Dy())
+	}
+	r, g, bl, _ := selFlashBg.RGBA()
+	lit := fmt.Sprintf("48;2;%d;%d;%d", r>>8, g>>8, bl>>8)
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		if !strings.Contains(rows[y], lit) {
+			t.Errorf("row %d of the chat is not lit: %q", y, ansi.Strip(rows[y]))
+		}
+	}
+}
+
+// The chat gone from the screen during a drag, nothing is lit where it was: the prompt took its rows.
+func TestModelMouseSelectChatGoneUnlit(t *testing.T) {
+	m := modelMouseLines(t, 26)
+	x, y := modelMouseAt(t, m, "line 16")
+	m.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+	m.Update(tea.MouseMotionMsg{X: 99, Y: y + 2, Button: tea.MouseLeft})
+	m.View()
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
+	v := m.View().Content
+	if !m.chatView.box.Empty() {
+		t.Fatal("the chat stays on screen")
+	}
+	r, g, bl, _ := theme.SelBg.RGBA()
+	if lit := fmt.Sprintf("48;2;%d;%d;%d", r>>8, g>>8, bl>>8); strings.Contains(v, lit) {
+		t.Error("lit with no chat on screen")
+	}
+}
+
+// Over the completions the chat does not scroll under a drag.
+func TestModelMouseSelectUnderCompletions(t *testing.T) {
+	m := modelMouseLines(t, 60)
+	m.scrollChat(20)
+	m.View()
+	x, y := modelMouseAt(t, m, "line 30")
+	m.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+	m.Update(tea.MouseMotionMsg{X: x, Y: m.chatView.box.Max.Y, Button: tea.MouseLeft})
+	m.Suggest = []protocol.Command{{Name: "help"}}
+	m.View()
+	if _, cmd := m.Update(selScrollMsg{}); cmd != nil || m.ChatScroll != 20 {
+		t.Errorf("scroll goes on %v, scrolled %d", cmd != nil, m.ChatScroll)
+	}
+}
+
+// Every key that deletes clears the whole prompt selected, wherever the cursor is, and ctrl+y puts
+// it back; typing clears it the same way.
+func TestModelPromptSelectAllKeys(t *testing.T) {
+	for _, key := range []string{"backspace", "ctrl+h", "delete", "ctrl+d", "ctrl+u", "super+backspace", "ctrl+k", "ctrl+w", "alt+backspace", "alt+d", "x"} {
+		m, _ := modelMouseNew(t)
+		modelPress(m, inputTyped("one two three")...)
+		modelPress(m, inputKeys("left left left left left left left")...) // mid "two"
+		m.handleKey(inputKey("super+a"))
+		m.handleKey(inputKey(key))
+		want := ""
+		if key == "x" {
+			want = "x"
+		}
+		if got := string(m.Input.Text); got != want || m.Input.all {
+			t.Errorf("%s: %q selected %v", key, got, m.Input.all)
+		}
+		m.handleKey(inputKey("ctrl+y"))
+		if got := string(m.Input.Text); got != want+"one two three" {
+			t.Errorf("%s then ctrl+y: %q", key, got)
+		}
+	}
+}
+
+// The selected prompt is lit from its text on, the "›" out; a shell command's "!" is lit with it,
+// as it is copied. Under a popup or the help nothing is lit.
+func TestModelPromptSelectAllLit(t *testing.T) {
+	r, g, bl, _ := theme.SelBg.RGBA()
+	lit := fmt.Sprintf("48;2;%d;%d;%d", r>>8, g>>8, bl>>8)
+	for _, c := range []struct{ text, first string }{{"fix it", "f"}, {"!ls -la", "!"}} {
+		m, _ := modelMouseNew(t)
+		modelPress(m, inputTyped(c.text)...)
+		m.handleKey(inputKey("super+a"))
+		_, y := modelMouseAt(t, m, c.text[1:])
+		row := strings.Split(m.View().Content, "\n")[y]
+		at := strings.Index(row, lit)
+		if at < 0 || !strings.HasPrefix(ansi.Strip(row[at+len(lit)+1:]), c.first) { // past the "m" of the colour
+			t.Errorf("%q: the lit part starts %q", c.text, ansi.Strip(row[max(at, 0):]))
+		}
+	}
+
+	// Under the help or a popup the prompt shows as with nothing selected.
+	m, _ := modelMouseNew(t)
+	modelPress(m, inputTyped("fix it")...)
+	m.handleKey(inputKey("super+a"))
+	m.sel = selection{} // no note of the copy: only the prompt differs
+	under := func(name string) {
+		selected := m.View().Content
+		m.Input.all = false
+		if plain := m.View().Content; selected != plain {
+			t.Errorf("lit under %s", name)
+		}
+		m.Input.all = true
+	}
+	m.ShowHelp = true
+	under("the help")
+	m.ShowHelp = false
+	modelEvents(m, protocol.PermissionRequest{RequestID: "p", ToolName: "Bash", Input: map[string]any{"command": "ls"}})
+	under("a popup")
+}
+
+// A key or a click elsewhere drops the selection: typing then goes on after the text. A picture
+// pasted goes with the text, never in place of it.
+func TestModelPromptSelectAllDropped(t *testing.T) {
+	for _, step := range []struct {
+		name string
+		do   func(m *Model)
+	}{
+		{"f1", func(m *Model) { m.handleKey(inputKey("f1")) }},
+		{"alt+z", func(m *Model) { m.handleKey(inputKey("alt+z")) }},
+		{"click", func(m *Model) {
+			m.Update(tea.MouseClickMsg{X: 10, Y: 2, Button: tea.MouseLeft})
+			m.Update(tea.MouseReleaseMsg{X: 10, Y: 2, Button: tea.MouseLeft})
+		}},
+	} {
+		m, _ := modelMouseNew(t)
+		modelPress(m, inputTyped("keep")...)
+		m.handleKey(inputKey("super+a"))
+		step.do(m)
+		modelPress(m, inputTyped("x")...)
+		if got := string(m.Input.Text); got != "keepx" {
+			t.Errorf("%s: %q", step.name, got)
+		}
+	}
+
+	m, _ := modelMouseNew(t)
+	modelPress(m, inputTyped("keep")...)
+	m.handleKey(inputKey("super+a"))
+	m.pasted(imagesMsg{images: []protocol.Image{{Media: "image/png", Data: []byte{0}}}})
+	if got := string(m.Input.Text); !strings.HasPrefix(got, "keep[Image #") || m.Input.all {
+		t.Errorf("picture: %q selected %v", got, m.Input.all)
 	}
 }
