@@ -244,29 +244,140 @@ func drawStyled(lines []string, render func(...string) string) []string {
 // renderInput draws the prompt field, one line of exactly width cells. cursorX is the cursor column within it.
 // A dimmed field does not have the keys.
 func renderInput(in *Input, width int, placeholder string, dim bool) (out string, cursorX int) {
+	lines, x, _ := renderInputRows(in, width, placeholder, dim, 1)
+	return lines[0], x
+}
+
+// renderInputRows draws the prompt field in up to rows lines of exactly width cells: the text
+// wrapped at the edge and at its newlines, scrolled to keep the cursor in sight. cursorX and
+// cursorY are where the cursor is among them. One row scrolls the text sideways instead.
+func renderInputRows(in *Input, width int, placeholder string, dim bool, rows int) (lines []string, cursorX, cursorY int) {
 	if width <= 0 {
-		return "", 0
+		return []string{""}, 0, 0
 	}
 	prompt, text := styleYou.Render("› "), styleFg
 	if dim {
 		prompt, text = styleDim.Render("› "), styleDim
 	}
-	runes, cursor := in.Text, in.Cursor
-	if bangInput(runes) { // the shell mode: its "!" stands in for the "›"
-		prompt, runes, cursor = styleBang.Render("! "), runes[1:], max(0, cursor-1)
+	runes, cursor := inputShown(in)
+	if bangInput(in.Text) { // the shell mode: its "!" stands in for the "›"
+		prompt = styleBang.Render("! ")
 		if dim {
 			prompt = styleDim.Render("! ")
 		}
 		placeholder = "a shell command, run in the project"
 	}
 	if len(runes) == 0 {
-		return drawFit(prompt+styleDim.Render(placeholder), width), min(2, width-1)
+		return []string{drawFit(prompt+styleDim.Render(placeholder), width)}, min(2, width-1), 0
+	}
+	if rows > 1 {
+		laid, row, col := layoutInput(runes, cursor, width-2)
+		from := min(max(0, row-rows+1), max(0, len(laid)-rows))
+		for i := from; i < min(len(laid), from+rows); i++ {
+			gutter := "  "
+			if i == 0 {
+				gutter = prompt
+			}
+			lines = append(lines, drawFit(gutter+text.Render(string(laid[i].text)), width))
+		}
+		return lines, min(2+col, width-1), row - from
 	}
 	disp, cur := drawInputRunes(runes, cursor)
 	start := drawScroll(disp, cur, width-2)
 	shown := ansi.Truncate(string(disp[start:]), max(0, width-2), "")
 	x := 2 + ansi.StringWidth(string(disp[start:cur]))
-	return drawFit(prompt+text.Render(shown), width), min(x, width-1)
+	return []string{drawFit(prompt+text.Render(shown), width)}, min(x, width-1), 0
+}
+
+// inputShown is the prompt's text as the field shows it, and the cursor in it: in the shell mode
+// without its "!", which the gutter shows.
+func inputShown(in *Input) ([]rune, int) {
+	if bangInput(in.Text) {
+		return in.Text[1:], max(0, in.Cursor-1)
+	}
+	return in.Text, in.Cursor
+}
+
+// inputRow is a line of the wrapped prompt: the runes runes[from:to] lead to, as drawn.
+type inputRow struct {
+	from, to int
+	text     []rune
+}
+
+// layoutInput wraps runes into rows of at most avail cells: a newline ends a row, a rune that
+// would pass the edge starts the next. It returns the rows and the cursor's row and column; a
+// cursor right after a full row stands at the start of the next, as a terminal's does.
+func layoutInput(runes []rune, cursor, avail int) (rows []inputRow, curRow, curCol int) {
+	avail = max(1, avail)
+	row, w := inputRow{}, 0
+	mark := func() { curRow, curCol = len(rows), w }
+	for i, r := range runes {
+		if r == '\n' {
+			if i == cursor {
+				mark()
+			}
+			row.to = i
+			rows, row, w = append(rows, row), inputRow{from: i + 1}, 0
+			continue
+		}
+		if ideview.Undrawn(r) {
+			if i == cursor {
+				mark()
+			}
+			continue
+		}
+		if unicode.IsControl(r) {
+			r = ' '
+		}
+		// Measured with the row, as it is drawn: a mark that joins the letter before it takes
+		// no cell of its own.
+		rw := max(0, ansi.StringWidth(string(row.text)+string(r))-w)
+		if w+rw > avail && len(row.text) > 0 {
+			row.to = i
+			rows, row, w = append(rows, row), inputRow{from: i}, 0
+		}
+		if i == cursor {
+			mark()
+		}
+		row.text = append(row.text, r)
+		w += rw
+	}
+	row.to = len(runes)
+	rows = append(rows, row)
+	if cursor >= len(runes) {
+		curRow, curCol = len(rows)-1, w
+		if w >= avail {
+			rows = append(rows, inputRow{from: len(runes), to: len(runes)})
+			curRow, curCol = len(rows)-1, 0
+		}
+	}
+	return rows, curRow, curCol
+}
+
+// inputIndexAt is the index in runes of column col of row, or of its last place: before the
+// first rune of the next row when this one wraps into it.
+func inputIndexAt(runes []rune, row inputRow, wraps bool, col int) int {
+	var drawn []rune
+	w := 0
+	for i := row.from; i < row.to; i++ {
+		r := runes[i]
+		if ideview.Undrawn(r) {
+			continue
+		}
+		if unicode.IsControl(r) {
+			r = ' '
+		}
+		// A rune that takes no cell joins the one before it: the place is past it.
+		nw := ansi.StringWidth(string(append(drawn, r)))
+		if nw > w && w >= col {
+			return i
+		}
+		drawn, w = append(drawn, r), nw
+	}
+	if wraps && row.to > row.from {
+		return row.to - 1
+	}
+	return row.to
 }
 
 // drawInputRunes is what a field shows of its runes, and where its cursor falls among them: '↵'

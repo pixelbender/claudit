@@ -840,12 +840,18 @@ func (m *Model) handleKey(k tea.KeyPressMsg) tea.Cmd {
 	case "ctrl+v":
 		return pasteClipboard
 	case "up":
+		if m.moveRow(-1) {
+			return nil
+		}
 		if m.queueAt >= 0 || len(m.Input.Text) == 0 && !m.browsing() && len(m.pending) > 0 {
 			m.walkQueue(-1)
 		} else {
 			m.recall(-1)
 		}
 	case "down":
+		if m.moveRow(+1) {
+			return nil
+		}
 		if m.queueAt >= 0 {
 			m.walkQueue(+1)
 		} else {

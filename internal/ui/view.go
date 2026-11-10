@@ -57,13 +57,19 @@ func (m *Model) View() tea.View {
 	}
 
 	entries := m.chatEntries()
+	in, cx, cy := renderInputRows(&m.Input, w-4, "Ask claude…", m.PanelFocus, inputMaxRows(h))
+	extra := len(in) - 1 // the rows the prompt takes past its one
+	// Laid out as for a one-row prompt, so that the IDE stays as typing goes on: the conversation
+	// gives up the rows, the IDE only those the conversation has not.
 	ideH, chatH := drawLayout(h, drawChatCount(&m.chatLines, entries, w))
+	fromChat := min(extra, chatH)
+	ideH, chatH = ideH-(extra-fromChat), chatH-fromChat
 	if m.inspection != nil && h >= drawIDEH {
 		if m.inspection.height < 0 {
 			m.inspection.height = ideH
 		}
-		ideH = min(m.inspection.height, h-4)
-		chatH = h - ideH - 4
+		ideH = min(m.inspection.height, h-4-extra)
+		chatH = h - ideH - 4 - extra
 	}
 	m.ideHeight = ideH
 	st := m.ideState()
@@ -134,7 +140,6 @@ func (m *Model) View() tea.View {
 			},
 			text: func(int, int) image.Rectangle { return image.Rect(4, 0, 2+tw, chatH) }})
 	}
-	in, cx := renderInput(&m.Input, w-4, "Ask claude…", m.PanelFocus)
 	var parts []string
 	if ideH > 0 {
 		parts = append(parts, top)
@@ -147,7 +152,7 @@ func (m *Model) View() tea.View {
 	if bangInput(m.Input.Text) && !m.PanelFocus {
 		border = theme.Pink // the shell mode, as Claude Code marks it
 	}
-	parts = append(parts, strings.Join(drawBox([]string{in}, w-4, border), "\n"), renderStatus(m.Status, hints, w))
+	parts = append(parts, strings.Join(drawBox(in, w-4, border), "\n"), renderStatus(m.Status, hints, w))
 	base := strings.Join(parts, "\n")
 
 	under := []*lipgloss.Layer{lipgloss.NewLayer(base)}
@@ -175,7 +180,7 @@ func (m *Model) View() tea.View {
 		over = lipgloss.NewLayer(box).X((w - lipgloss.Width(box)) / 2).Y((h - lipgloss.Height(box)) / 2)
 		m.zones = nil // a click anywhere closes it
 	case !m.PanelFocus: // the keys go to the agents panel: no caret in the prompt
-		v.Cursor = tea.NewCursor(2+cx, ideH+chatH+1)
+		v.Cursor = tea.NewCursor(2+cx, ideH+chatH+1+cy)
 	}
 	selecting := m.sel.drag && m.sel.out(m.Now) < 1 && m.Popup == nil && !m.ShowHelp
 	if len(under) == 1 && over == nil && !selecting {
@@ -286,6 +291,10 @@ func drawTitle(st Status, asking bool) (string, *tea.ProgressBar) {
 func drawNotice(text string) string {
 	return "\x1b]9;" + ansi.Truncate(strings.ReplaceAll(drawUnescaped(text), "\n", " "), 160, "…") + "\x07"
 }
+
+// inputMaxRows is how many rows the prompt grows to on a screen h rows high: a quarter of it,
+// ten at most, as long as the conversation keeps room.
+func inputMaxRows(h int) int { return min(10, max(1, h/4)) }
 
 // drawLayout splits the height: the IDE on top, then the chat, as tall as its chat lines up to
 // drawChatShare of the screen, the input box (3 lines) and the status line. Below drawIDEH rows

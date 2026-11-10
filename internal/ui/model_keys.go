@@ -189,3 +189,21 @@ func (m *Model) recall(d int) {
 	text := []rune(m.recalled(m.history[i], i < m.historyOld))
 	m.Input = Input{Text: text, Cursor: len(text)}
 }
+
+// moveRow moves the cursor a row up (d = -1) or down (+1) in a prompt that takes more than one,
+// to the same column or the end of a shorter row, as Claude Code does, and reports whether it
+// did: from the first row up, or the last down, the keys walk the history instead.
+func (m *Model) moveRow(d int) bool {
+	if inputMaxRows(m.Height) < 2 {
+		return false
+	}
+	runes, cursor := inputShown(&m.Input)
+	rows, row, col := layoutInput(runes, cursor, m.Width-4-2)
+	to := row + d
+	if len(rows) < 2 || to < 0 || to >= len(rows) {
+		return false
+	}
+	at := inputIndexAt(runes, rows[to], to+1 < len(rows) && rows[to+1].from == rows[to].to, col)
+	m.Input.Cursor = at + len(m.Input.Text) - len(runes)
+	return true
+}
