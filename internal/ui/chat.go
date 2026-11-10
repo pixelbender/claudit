@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"charm.land/lipgloss/v2"
@@ -342,10 +343,13 @@ func renderStatus(st Status, hints []string, width int) string {
 		parts = append(parts, part{mode, 0})
 	}
 	if st.Usage != "" {
-		parts = append(parts, part{drawUsage(st.Usage), 3})
+		parts = append(parts, part{drawUsage(st.Usage), 2})
 	}
 	if st.Context > 0 {
-		parts = append(parts, part{drawContext(st.Context), 2})
+		parts = append(parts, part{drawContext(st.Context), 3})
+	}
+	if st.CacheTTL > 0 {
+		parts = append(parts, part{drawCache(st.CacheLeft, st.CacheTTL), 3})
 	}
 	if st.Replay {
 		parts = append(parts, part{styleFg.Render("replay"), 4})
@@ -473,6 +477,30 @@ const drawExtraUsage = "extra usage"
 func drawContext(f float64) string {
 	pct := int(math.Round(min(max(f, 0), 1) * 100))
 	return styleDim.Render("ctx ") + drawFull(pct).Render(fmt.Sprintf("%d%%", pct))
+}
+
+// defaultCacheTTL is how long a prompt cache lives when no call has told: the API's default.
+const defaultCacheTTL = 5 * time.Minute
+
+// drawCache is how long main's prompt cache lives on, in few cells: "cache" grey, then minutes
+// ("4m"), minutes and seconds in the last two ("1:45"), coloured by drawFull as the time runs
+// out; "cold" once it has expired, when the next prompt writes anew what was cached for that
+// long: the whole context, or the part written for five minutes when a call wrote for an hour too.
+func drawCache(left, ttl time.Duration) string {
+	if left <= 0 {
+		return styleDim.Render("cache cold")
+	}
+	s := int(left.Seconds())
+	t := fmt.Sprintf("%d:%02d", s/60, s%60)
+	if left >= 2*time.Minute {
+		t = fmt.Sprintf("%dm", s/60)
+	}
+	return styleDim.Render("cache ") + drawFull(cacheUsed(left, ttl)).Render(t)
+}
+
+// cacheUsed is the percentage of the cache's TTL gone by, for drawFull.
+func cacheUsed(left, ttl time.Duration) int {
+	return 100 - int(left*100/ttl)
 }
 
 // drawFull is the colour of a share used up: as the auto mode from 80%, in Claude's own orange

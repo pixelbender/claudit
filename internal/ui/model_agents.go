@@ -399,6 +399,11 @@ func (m *Model) sync() {
 	if w := m.windows[m.context.Model]; w > 0 {
 		m.Status.Context = float64(m.context.Tokens) / float64(w)
 	}
+	m.Status.CacheLeft, m.Status.CacheTTL = 0, 0
+	if !m.cacheAt.IsZero() {
+		m.Status.CacheTTL = cmp.Or(m.cacheTTL, defaultCacheTTL)
+		m.Status.CacheLeft = max(0, m.cacheAt.Add(m.Status.CacheTTL).Sub(m.Now))
+	}
 }
 
 // usage formats the use of the rate-limit windows, each with the time until it resets: "5h 9%

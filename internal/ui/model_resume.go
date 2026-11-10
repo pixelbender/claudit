@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -162,6 +163,7 @@ func (m *Model) resumed(msg historyMsg) {
 		m.Chat = append(m.Chat, e)
 	}
 	m.context, m.cost, m.usageKnown, m.session = protocol.Context{}, 0, false, msg.info.ID // a new process counts anew
+	m.cacheAt = time.Time{}                                                                // the cache was the old conversation's
 	m.Status.State = "starting"                                                            // until the new process answers
 	m.local("Resumed: " + msg.info.Title)
 }

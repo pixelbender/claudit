@@ -102,10 +102,16 @@ type TextStart struct{}
 type TextDelta struct{ Text string }
 
 // Context is how full the main agent's context is as a model call starts: the tokens the call
-// reads (`message_start` usage).
+// reads (`message_start` usage). The call also keeps the prompt cache alive: TTFT is how long
+// before this event the call reached the API, CacheTTL how long the cache lives after it, as the
+// call's own cache writes tell (0 when it wrote none): the shorter one when it wrote for both, for
+// what was written for five minutes is written anew after them.
 type Context struct {
-	Model  string
-	Tokens int
+	Model    string
+	Tokens   int
+	TTFT     time.Duration
+	CacheTTL time.Duration
+	Cached   bool // the call read or wrote the prompt cache: with none, there is no cache to time
 }
 
 // CLIReply is a reply of the CLI itself rather than the model: a slash command's output or an
@@ -602,6 +608,7 @@ func parseTaskDone(line []byte) []Event {
 func parseStreamEvent(line []byte) []Event {
 	var m struct {
 		Parent string `json:"parent_tool_use_id"`
+		TTFT   int    `json:"ttft_ms"`
 		Event  struct {
 			Type         string `json:"type"`
 			ContentBlock struct {
@@ -626,6 +633,10 @@ func parseStreamEvent(line []byte) []Event {
 					Input         int `json:"input_tokens"`
 					CacheRead     int `json:"cache_read_input_tokens"`
 					CacheCreation int `json:"cache_creation_input_tokens"`
+					CacheWrites   struct {
+						FiveMinutes int `json:"ephemeral_5m_input_tokens"`
+						OneHour     int `json:"ephemeral_1h_input_tokens"`
+					} `json:"cache_creation"`
 				} `json:"usage"`
 			} `json:"message"`
 		} `json:"event"`
@@ -637,7 +648,15 @@ func parseStreamEvent(line []byte) []Event {
 	switch {
 	case e.Type == "message_start":
 		u := e.Message.Usage
-		return []Event{Context{Model: e.Message.Model, Tokens: u.Input + u.CacheRead + u.CacheCreation}}
+		var ttl time.Duration
+		switch {
+		case u.CacheWrites.FiveMinutes > 0:
+			ttl = 5 * time.Minute
+		case u.CacheWrites.OneHour > 0:
+			ttl = time.Hour
+		}
+		return []Event{Context{Model: e.Message.Model, Tokens: u.Input + u.CacheRead + u.CacheCreation,
+			TTFT: time.Duration(m.TTFT) * time.Millisecond, CacheTTL: ttl, Cached: u.CacheRead+u.CacheCreation > 0}}
 	case e.Type == "content_block_start" && e.ContentBlock.Type == "fallback" && e.ContentBlock.To.Model != "":
 		return []Event{ServingModel{Model: e.ContentBlock.To.Model}}
 	case e.Type == "message_delta":
