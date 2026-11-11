@@ -53,6 +53,9 @@ func Scrollbars(st *ide.State, o Options, width, height int) []Scrollbar {
 		base.Scroll = nil
 		tree, follow := agentsView(st, camera(st), base, ih)
 		add(agentsPaneKey, left, follow, max(0, len(tree)-ih), ih)
+	} else if v := outlined(st, o, width, height); v != nil {
+		rows, _, follow, _ := v.outline(o, ih)
+		add(outlineKey(v.path), left, follow, max(0, len(rows)-ih), ih)
 	} else {
 		add(filesPane, left, scrollTop(treeSel(st, camera(st)), len(st.Tree), ih), max(0, len(st.Tree)-ih), ih)
 	}
@@ -69,7 +72,9 @@ func Scrollbars(st *ide.State, o Options, width, height int) []Scrollbar {
 			ph := pageHeight(ih)
 			add(paneKey(st, c), r, 0, max(0, len(pageRows(&c.agent.Page, textWidth(iw), -1))-ph), ph)
 		default:
-			if tab := shownTab(st, c.agent); tab != nil {
+			if v := structured(st, c.agent, o, iw, ih); v != nil {
+				add(specKey(v.path), r, 0, v.last, ih)
+			} else if tab := shownTab(st, c.agent); tab != nil {
 				lines, cur, tw := editorText(tab, c.agent, iw)
 				follow, last := editorRange(lines, cur, tw, ih, o.Wrap)
 				add(paneKey(st, c), r, follow, last, ih)

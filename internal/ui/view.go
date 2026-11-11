@@ -78,7 +78,11 @@ func (m *Model) View() tea.View {
 	if m.Panel == ideview.Agents {
 		hints = slices.Insert(slices.Clone(hints), 1, drawHintTab)
 	}
-	o := ideview.Options{Panel: m.Panel, Focused: m.PanelFocus, Sel: m.PanelSel, Now: m.Now, Busy: m.Status.Busy, Wrap: m.Wrap, Scroll: m.scroll, Terms: m.termCache}
+	o := ideview.Options{Panel: m.Panel, Focused: m.PanelFocus, Sel: m.PanelSel, Now: m.Now, Busy: m.Status.Busy, Wrap: m.Wrap,
+		Raw: m.Raw, Explorer: m.Explorer, Specs: m.specs, Modes: m.specModes, SpecRows: m.specRows, Scroll: m.scroll, Terms: m.termCache}
+	if m.mains != nil {
+		o.Main = m.mains.lines
+	}
 	if m.inspection != nil {
 		o.Now, o.Busy = m.inspection.frame, m.inspection.busy
 	}
@@ -86,12 +90,19 @@ func (m *Model) View() tea.View {
 	case ideH == 0: // too low for the IDE: the conversation alone
 		clear(m.scroll)
 		clear(m.termCache)
+		clear(m.specRows)
 	default:
 		ideview.Prune(st, o, w, ideH)
 		frame, bars := ideview.RenderWithScrollbars(st, o, w, ideH)
 		top = frame
 		m.zones = append(m.zones, zone{w: w, h: ideH,
 			click: func(x, y int) tea.Cmd {
+				if ideview.SwitchAt(st, o, w, ideH, x, y) {
+					return m.clickSwitch()
+				}
+				if hit, ok := ideview.SpecAt(st, o, w, ideH, x, y); ok {
+					return m.clickSpec(hit)
+				}
 				path, dir := ideview.TreeAt(st, o, w, ideH, x, y)
 				switch {
 				case dir:

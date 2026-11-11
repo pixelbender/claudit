@@ -18,13 +18,15 @@ import (
 func drawTestModel(t *testing.T, w, h int) *Model {
 	t.Helper()
 	return &Model{
-		Sim:    sim.New(t.TempDir()),
-		Width:  w,
-		Height: h,
-		Chat:   drawTestEntries,
-		Input:  Input{Text: []rune("rewrite 世界 😀"), Cursor: 3},
-		Status: Status{Model: "claude-sonnet-4-5", State: "idle"},
-		clock:  func() time.Time { return modelT0 },
+		Sim:       sim.New(t.TempDir()),
+		Width:     w,
+		Height:    h,
+		Chat:      drawTestEntries,
+		Input:     Input{Text: []rune("rewrite 世界 😀"), Cursor: 3},
+		Status:    Status{Model: "claude-sonnet-4-5", State: "idle"},
+		clock:     func() time.Time { return modelT0 },
+		specs:     ideview.Specs{},
+		specModes: ideview.SpecModes{},
 	}
 }
 

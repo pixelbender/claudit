@@ -23,6 +23,8 @@ func (m *Model) globalKey(key string) bool {
 		m.cycleMode()
 	case key == "alt+z":
 		m.Wrap = !m.Wrap
+	case key == "alt+s":
+		m.Raw = !m.Raw
 	case key == "tab":
 		if m.PanelFocus {
 			m.PanelFocus = false

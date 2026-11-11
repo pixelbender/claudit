@@ -32,7 +32,7 @@ func modelMouseNew(t *testing.T) (*Model, *[]protocol.Outbound) {
 // modelMouseAt draws m and finds text on the screen: the cell where it starts.
 func modelMouseAt(t *testing.T, m *Model, text string) (x, y int) {
 	t.Helper()
-	for y, l := range strings.Split(ansi.Strip(m.View().Content), "\n") {
+	for y, l := range strings.Split(modelScreen(m), "\n") {
 		if i := strings.Index(l, text); i >= 0 {
 			return ansi.StringWidth(l[:i]), y
 		}

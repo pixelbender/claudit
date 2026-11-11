@@ -332,6 +332,9 @@ func (m *Model) tick(now time.Time) {
 		}
 	}
 	m.replayAllow(now)
+	if m.mains != nil {
+		m.mains.poll(now)
+	}
 	m.Sim.Tick(now)
 	m.Status.Frame = int(now.UnixMilli() / 100)
 }
