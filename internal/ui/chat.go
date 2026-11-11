@@ -31,20 +31,25 @@ type chatCache struct {
 	width   int
 	entries []ChatEntry // each entry as it was when drawn
 	lines   [][]string
+	marks   []chatMarks // the paths in each entry's lines
+	paths   *pathCheck  // finds them; nil underlines none
 }
 
 // draw returns the lines of entry i, drawing it again only when it changed.
 func (c *chatCache) draw(i int, e ChatEntry, w int) []string {
 	if w != c.width {
-		*c = chatCache{width: w}
+		*c = chatCache{width: w, paths: c.paths}
 	}
 	for len(c.entries) <= i {
 		c.entries = append(c.entries, ChatEntry{Kind: -1}) // never equal to a real entry
 		c.lines = append(c.lines, nil)
+		c.marks = append(c.marks, chatMarks{})
 	}
 	if c.entries[i] != e {
 		c.entries[i], c.lines[i] = e, drawEntry(e, w)
+		c.marks[i] = chatMarks{raw: c.lines[i]}
 	}
+	c.lines[i] = c.paths.mark(e, &c.marks[i], c.lines[i])
 	return c.lines[i]
 }
 

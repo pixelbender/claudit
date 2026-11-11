@@ -113,6 +113,7 @@ var drawHelpRows = [][2]string{
 	{"pgup pgdn", "scroll the conversation (or the wheel)"},
 	{"drag", "select text in the conversation or a pane; letting go copies it"},
 	{"click", "what a Bash call does, in the conversation: where it ran, in the terminal"},
+	{"click a path", "an underlined file or folder in the conversation opens: a folder in the file manager, a document, picture or source file in its app; anything else, a script or an app among them, is only shown in the file manager"},
 	{"", "Questions and permissions"},
 	{"y  n", "allow, deny (esc denies too); ↑/↓ pgup/pgdn scroll; or click"},
 	{"", "Camera"},

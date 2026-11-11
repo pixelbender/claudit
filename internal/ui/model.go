@@ -120,6 +120,10 @@ type Model struct {
 	bangRun  *bangRun // the ! command running; nil for none
 	bangs    int      // ! commands run, for their ids
 	bangSaid []string // the ! commands run since the last prompt, as claude is to see them with the next
+
+	paths   *pathCheck                // finds the paths the chat names
+	pathRun func(args []string) error // runs the opener of a path clicked in the chat
+	opening tea.Cmd                   // what a click on a path runs as the button lets go
 }
 
 type EntryKind int
@@ -240,6 +244,7 @@ func New(send func(protocol.Outbound), cwd string, replay bool) *Model {
 		queueAt:   -1,
 		ideHeight: -1,
 	}
+	m.paths, m.pathRun = newPathCheck(func() string { return m.Sim.State().Root }), pathRunner
 	m.addCommands(nil)
 	m.sync()
 	return m
@@ -283,6 +288,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pasted(msg)
 	case bangDoneMsg:
 		m.bangDone(msg)
+	case pathOpenedMsg:
+		m.pathOpened(msg)
+	case pathsSeenMsg:
+		m.paths.answer(msg)
 	case tea.KeyPressMsg:
 		m.interact()
 		cmd = m.handleKey(msg)
@@ -320,7 +329,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.onRelease()
 		}
 		m.onRelease = nil
-		cmd = m.copySelection()
+		cmd, m.opening = tea.Batch(m.copySelection(), m.opening), nil
 	case tea.FocusMsg:
 		m.Away = false
 	case tea.BlurMsg:
@@ -329,6 +338,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.mouseDown = false
 	}
 	m.sync()
+	cmd = tea.Batch(cmd, m.paths.ask()) // the paths the last frame asked for
 	if m.notice != "" {
 		if m.Away {
 			cmd = tea.Batch(cmd, tea.Raw(drawNotice(m.notice)))
