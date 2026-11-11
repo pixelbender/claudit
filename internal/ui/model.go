@@ -46,6 +46,8 @@ type Model struct {
 	PanelSel   string        // key of the agent highlighted in the agents panel
 	ShowHelp   bool          // F1: the key reference over everything
 	Wrap       bool          // the editor wraps long lines (alt+z)
+	Raw        bool          // the editor shows OpenSpec specs as written, not structured (alt+s)
+	Explorer   bool          // the left column shows the files beside a spec, not its outline (a click on its title)
 
 	Suggest    []protocol.Command // slash commands completing the prompt, shown above it
 	SuggestSel int                // highlighted one
@@ -57,6 +59,8 @@ type Model struct {
 	zones      []zone            // what clicks act on, written by View
 	sel        selection         // the text the mouse drags over; View writes what it covers
 	scroll     ideview.Scroll    // how far the wheel scrolled the IDE's panes; View forgets those it no longer draws
+	specs      ideview.Specs     // how the user folded the specs the editor shows structured
+	specRows   ideview.SpecCache // the specs on screen as laid out, kept by View
 	termCache  ideview.TermCache // wrapped row counts for the visible terminals
 	burst      wheelBurst        // the wheel events Filter held back since the last frame of a scroll
 	inspection *inspection       // the IDE the user is reading during the interaction cooldown
@@ -235,6 +239,8 @@ func New(send func(protocol.Outbound), cwd string, replay bool) *Model {
 
 		known:     map[string]bool{},
 		scroll:    ideview.Scroll{},
+		specs:     ideview.Specs{},
+		specRows:  ideview.SpecCache{},
 		termCache: ideview.TermCache{},
 		attached:  map[string]attachment{},
 		queueAt:   -1,

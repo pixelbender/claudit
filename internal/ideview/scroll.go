@@ -59,6 +59,11 @@ func Wheel(st *ide.State, o Options, width, height, x, y, n int) (string, int) {
 		tree, top := agentsView(st, camera(st), base, ih)
 		return agentsPaneKey, step(o.Scroll[agentsPaneKey], n, top-max(0, len(tree)-ih), top)
 	case !ok && o.Panel == Files:
+		if v := outlined(st, o, width, height); v != nil {
+			rows, _, follow, _ := v.outline(o, ih)
+			key := outlineKey(v.path)
+			return key, step(o.Scroll[key], n, follow-max(0, len(rows)-ih), follow)
+		}
 		top := scrollTop(treeSel(st, camera(st)), len(st.Tree), ih)
 		return filesPane, step(o.Scroll[filesPane], n, top-max(0, len(st.Tree)-ih), top)
 	case !ok:
@@ -73,6 +78,10 @@ func Wheel(st *ide.State, o Options, width, height, x, y, n int) (string, int) {
 	tab := shownTab(st, c.agent)
 	if tab == nil {
 		return "", 0
+	}
+	if v := structured(st, c.agent, o, iw, ih); v != nil { // it follows the top of the spec
+		key := specKey(tab.Path)
+		return key, step(o.Scroll[key], n, -v.last, 0)
 	}
 	key := fileKey(tab.Path)
 	lines, cur, tw := editorText(tab, c.agent, iw)
@@ -92,18 +101,27 @@ func step(d, n, lo, hi int) int {
 }
 
 // Prune forgets the scroll of the panes Render(st, o, width, …) does not draw, so that one coming
-// back follows its agent.
+// back follows its agent. A spec keeps its scroll, and its layout, while its file is on screen, as
+// written or not.
 func Prune(st *ide.State, o Options, width, height int) {
-	shown := map[string]bool{filesPane: o.Panel == Files, agentsPaneKey: o.Panel == Agents}
-	terms := map[*ide.Term]bool{}
+	v := outlined(st, o, width, height)
+	shown := map[string]bool{filesPane: o.Panel == Files && v == nil, agentsPaneKey: o.Panel == Agents}
+	if v != nil {
+		shown[outlineKey(v.path)] = true
+	}
+	terms, files := map[*ide.Term]bool{}, map[string]bool{}
 	for _, c := range columns(st, camera(st), o, width-leftWidth(width), height) {
 		shown[paneKey(st, c)] = true
+		if tab := shownTab(st, c.agent); c.pane == ide.Editor && tab != nil {
+			shown[specKey(tab.Path)], files[tab.Path] = true, true
+		}
 		if c.pane == ide.Terminal {
 			terms[&c.agent.Term] = true
 		}
 	}
 	maps.DeleteFunc(o.Scroll, func(k string, _ int) bool { return !shown[k] })
 	maps.DeleteFunc(o.Terms, func(t *ide.Term, _ termLayout) bool { return !terms[t] })
+	maps.DeleteFunc(o.SpecRows, func(path string, _ *specLayout) bool { return !files[path] })
 }
 
 // TermScroll is the scroll of agent's terminal in Render(st, o, width, height) that brings the

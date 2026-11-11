@@ -25,6 +25,7 @@ func drawTestModel(t *testing.T, w, h int) *Model {
 		Input:  Input{Text: []rune("rewrite 世界 😀"), Cursor: 3},
 		Status: Status{Model: "claude-sonnet-4-5", State: "idle"},
 		clock:  func() time.Time { return modelT0 },
+		specs:  ideview.Specs{},
 	}
 }
 

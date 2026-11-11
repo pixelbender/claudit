@@ -24,7 +24,11 @@ func editorPane(st *ide.State, cam *ide.Agent, o Options, w, h int) []string {
 	if tab == nil {
 		body = splash(iw, ih)
 	} else {
-		body = editorBody(st, cam, tab, o, iw, ih)
+		if v := structured(st, cam, o, iw, ih); v != nil {
+			body = v.body(iw, ih)
+		} else {
+			body = editorBody(st, cam, tab, o, iw, ih)
+		}
 		head = " " + title(st, cam, func(room int) string { return shortPath(tab.Path, st.Root, room) }, iw-3) + " "
 	}
 	return frame(w, h, theme.Border, head, body)

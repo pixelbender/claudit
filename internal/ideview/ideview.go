@@ -49,10 +49,13 @@ func RenderWithScrollbars(st *ide.State, o Options, width, height int) (string, 
 	ew := leftWidth(width)
 	rw := width - ew
 	var left []string
-	if o.Panel == Agents {
+	switch v := beside(st, o, width, height); {
+	case o.Panel == Agents:
 		left = agentsPane(st, cam, o, ew, height)
-	} else {
-		left = explorerPane(st, cam, o, ew, height)
+	case v != nil && !o.Explorer:
+		left = outlinePane(v, o, ew, height)
+	default:
+		left = explorerPane(st, cam, o, ew, height, v != nil)
 	}
 	lines := slices.Clone(left)
 	cols := columns(st, cam, o, rw, height)
@@ -95,9 +98,10 @@ func AgentAt(st *ide.State, o Options, width, height, x, y int) string {
 }
 
 // TreeAt is the explorer row a click at cell (x, y) of Render(st, o, width, height) falls on: its
-// path, "" for none, and whether it is a folder.
+// path, "" for none, and whether it is a folder. There is none while the outline of a spec is in
+// place of the explorer.
 func TreeAt(st *ide.State, o Options, width, height, x, y int) (path string, dir bool) {
-	if o.Panel != Files || x < 0 || x >= leftWidth(width) || y < 1 || y >= height-1 {
+	if o.Panel != Files || x < 0 || x >= leftWidth(width) || y < 1 || y >= height-1 || outlined(st, o, width, height) != nil {
 		return "", false
 	}
 	_, ih := inner(0, height)
@@ -118,15 +122,17 @@ func TextAt(st *ide.State, o Options, width, height, x, y int) image.Rectangle {
 	}
 	y0, y1 := 1, height-1
 	if c, t, ok := columnAt(st, o, width, height, x, y); ok {
-		iw, _ := inner(t.Dx(), t.Dy())
+		iw, ih := inner(t.Dx(), t.Dy())
 		x0, w, y0, y1 = t.Min.X+2, textWidth(iw), t.Min.Y+1, t.Max.Y-1
-		if c.pane == ide.Editor {
+		if c.pane == ide.Editor { // a spec shown structured has the air of a terminal
 			tab := shownTab(st, c.agent)
 			if tab == nil {
 				return image.Rectangle{}
 			}
-			_, _, tw := editorText(tab, c.agent, iw)
-			x0, w = t.Min.X+1+iw-tw, tw
+			if structured(st, c.agent, o, iw, ih) == nil {
+				_, _, tw := editorText(tab, c.agent, iw)
+				x0, w = t.Min.X+1+iw-tw, tw
+			}
 		}
 	}
 	r := image.Rect(x0, y0, x0+max(w, 0), max(y1, y0))
@@ -166,7 +172,9 @@ func agentColor(a *ide.Agent) color.Color {
 	return theme.Agents[(a.Color%n+n)%n]
 }
 
-func explorerPane(st *ide.State, cam *ide.Agent, o Options, w, h int) []string {
+// explorerPane draws the files in the left column, w×h cells; beside a spec its title offers the
+// spec's outline in their place.
+func explorerPane(st *ide.State, cam *ide.Agent, o Options, w, h int, outline bool) []string {
 	iw, ih := inner(w, h)
 	sel, lit := treeSel(st, cam), cam.Focus == ide.Explorer
 	if st.Viewed != "" { // the user's pick while it fills the right column; the scroll stays put
@@ -216,6 +224,9 @@ func explorerPane(st *ide.State, cam *ide.Agent, o Options, w, h int) []string {
 			base.Foreground(nc).Render(name) + base.Foreground(theme.Yellow).Render(mark) + base.Render(pad)
 	}
 	title := " " + fgStyle.Render(clip(filepath.Base(st.Root), iw, "")) + " "
+	if outline {
+		title = switchTitle(iw-1, "outline", "files")
+	}
 	return frame(w, h, theme.Border, title, rows)
 }
 
