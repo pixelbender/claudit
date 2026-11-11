@@ -173,6 +173,7 @@ func (m *Model) sendBangs() {
 	}
 	m.send(protocol.UserMessage{Text: strings.Join(m.bangSaid, "\n")})
 	m.bangSaid = nil
+	m.todoTurn()
 	m.Status.State, m.Status.Busy, m.Status.Alert, m.cmdTurn, m.effortTurn = "thinking", true, false, true, false
 }
 

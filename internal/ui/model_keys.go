@@ -23,6 +23,8 @@ func (m *Model) globalKey(key string) bool {
 		m.cycleMode()
 	case key == "alt+z":
 		m.Wrap = !m.Wrap
+	case key == "ctrl+t": // as in Claude Code
+		m.todo.open = !m.todo.open && len(m.todo.items) > 0
 	case key == "tab":
 		if m.PanelFocus {
 			m.PanelFocus = false

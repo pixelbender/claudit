@@ -60,7 +60,7 @@ type Model struct {
 	termCache  ideview.TermCache // wrapped row counts for the visible terminals
 	burst      wheelBurst        // the wheel events Filter held back since the last frame of a scroll
 	inspection *inspection       // the IDE the user is reading during the interaction cooldown
-	ideHeight  int               // IDE height in the last frame; -1 before the first frame
+	ideHeight  int               // IDE height in the last frame before the task list took its rows; -1 before the first frame
 	mouseDown  bool              // a held button protects the view until five seconds after release
 	send       func(protocol.Outbound)
 	queue      []Popup          // requests waiting behind the open popup
@@ -120,6 +120,8 @@ type Model struct {
 	bangRun  *bangRun // the ! command running; nil for none
 	bangs    int      // ! commands run, for their ids
 	bangSaid []string // the ! commands run since the last prompt, as claude is to see them with the next
+
+	todo todo // main's task list, shown above the prompt
 }
 
 type EntryKind int
@@ -461,7 +463,7 @@ func (m *Model) handleEvent(ev protocol.Event) {
 		}
 	case protocol.Reset:
 		m.Chat, m.chatLines, m.ChatScroll, m.btwSaid = nil, chatCache{}, 0, nil
-		m.context = protocol.Context{}
+		m.context, m.todo = protocol.Context{}, todo{}
 		m.local("Conversation cleared")
 	case protocol.Thinking:
 		m.working("thinking")
@@ -491,6 +493,7 @@ func (m *Model) handleEvent(ev protocol.Event) {
 			m.Chat = append(m.Chat, ChatEntry{Kind: AssistantEntry, Text: d, At: now, Bash: true, Call: ev.ID}) // what it does, in claude's words
 		}
 	case protocol.ToolResult:
+		m.todoResult(ev)
 		m.toolResult(ev, now)
 	case protocol.TaskStarted:
 		m.taskStarted(ev, now)
@@ -746,6 +749,9 @@ func (m *Model) working(state string) {
 	} else {
 		m.Status.State = state
 	}
+	if !m.Status.Busy { // a turn claude starts by itself, or one a replay plays
+		m.todoTurn()
+	}
 	m.Status.Busy = true
 }
 
@@ -950,6 +956,7 @@ func (m *Model) prompt(text string) tea.Cmd {
 		return nil
 	}
 	m.send(m.message(text))
+	m.todoTurn()
 	m.Status.State, m.Status.Busy, m.Status.Alert, m.cmdTurn = turnState(cmd, isCmd), true, false, isCmd
 	m.effortTurn = isCmd && cmd == "effort"
 	return nil
@@ -1065,6 +1072,7 @@ func (m *Model) flush() {
 		}
 	}
 	m.send(m.message(strings.Join(m.pending[:n], "\n\n")))
+	m.todoTurn()
 	first, isCmd := slash(m.pending[0])
 	at := len(m.Chat)
 	if m.Status.Busy && at > 0 && m.Chat[at-1].Kind == AssistantEntry {

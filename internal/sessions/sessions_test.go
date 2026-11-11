@@ -148,3 +148,32 @@ func TestHistory(t *testing.T) {
 		t.Error("History of a missing conversation succeeded")
 	}
 }
+
+func TestCalls(t *testing.T) {
+	dir := t.TempDir()
+	sessionsWrite(t, dir, "s", time.Now(),
+		`{"type":"user","message":{"role":"user","content":"plan it"}}`,
+		`{"type":"assistant","message":{"model":"m","content":[{"type":"tool_use","id":"c1","name":"TaskCreate","input":{"subject":"Read"}},{"type":"tool_use","id":"b1","name":"Bash","input":{"command":"ls"}}]}}`,
+		`{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"b1","content":"a.go"},{"type":"tool_result","tool_use_id":"c1","content":"Task #1 created successfully: Read"}]}}`,
+		`{"type":"assistant","message":{"model":"m","content":[{"type":"tool_use","id":"u1","name":"TaskUpdate","input":{"taskId":"1","status":"completed"}}]}}`,
+		`{"type":"assistant","isSidechain":true,"message":{"model":"m","content":[{"type":"tool_use","id":"x1","name":"TaskCreate","input":{"subject":"its"}}]}}`,
+		`{"type":"user","isSidechain":true,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"x1","content":"Task #2 created successfully: its"}]}}`,
+		`{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"u1","content":[{"type":"text","text":"Updated task #1 status"}],"is_error":true}]}}`,
+		`{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"gone","content":"no call"}]}}`,
+		`{"type":"assistant","message":{"model":"m","content":[{"type":"tool_use","id":"w1","name":"TodoWrite","input":{"todos":[]}}]}}`,
+		`not json`)
+	got, err := Calls(dir, "s", "TaskCreate", "TaskUpdate", "TodoWrite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Call{
+		{Name: "TaskCreate", Input: map[string]any{"subject": "Read"}, Output: "Task #1 created successfully: Read"},
+		{Name: "TaskUpdate", Input: map[string]any{"taskId": "1", "status": "completed"}, Output: "Updated task #1 status", Error: true},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Calls =\n%+v\nwant\n%+v", got, want)
+	}
+	if _, err := Calls(dir, "missing", "TaskCreate"); err == nil {
+		t.Error("Calls of a missing conversation succeeded")
+	}
+}

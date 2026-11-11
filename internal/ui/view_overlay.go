@@ -122,6 +122,7 @@ var drawHelpRows = [][2]string{
 	{"alt+z", "word wrap in the editor on/off"},
 	{"", "Views"},
 	{"F1  /help", "this reference"},
+	{"ctrl+t", "the task list: every task, or the one line above the prompt; a click on it too"},
 	{"ctrl+c", "clear the prompt, interrupt, or quit (twice)"},
 }
 

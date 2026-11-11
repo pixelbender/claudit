@@ -57,6 +57,7 @@ func (m *Model) View() tea.View {
 	}
 
 	entries := m.chatEntries()
+	tasks := m.drawTodo(w, max(1, h/4))
 	ideH, chatH := drawLayout(h, drawChatCount(&m.chatLines, entries, w))
 	if m.inspection != nil && h >= drawIDEH {
 		if m.inspection.height < 0 {
@@ -65,7 +66,11 @@ func (m *Model) View() tea.View {
 		ideH = min(m.inspection.height, h-4)
 		chatH = h - ideH - 4
 	}
-	m.ideHeight = ideH
+	m.ideHeight = ideH // before the task list takes its rows, which it does anew each frame
+	// The task list's rows come from the IDE, down to todoIDEKeep rows, so that the conversation
+	// keeps what it shows; it gives the rest, all of them on a screen too low for the IDE.
+	fromIDE := max(min(len(tasks), ideH-todoIDEKeep), len(tasks)-chatH, 0)
+	ideH, chatH = ideH-fromIDE, chatH-(len(tasks)-fromIDE)
 	st := m.ideState()
 	var top string
 	hints := drawHintsPrompt
@@ -134,6 +139,9 @@ func (m *Model) View() tea.View {
 			},
 			text: func(int, int) image.Rectangle { return image.Rect(4, 0, 2+tw, chatH) }})
 	}
+	if len(tasks) > 0 && len(m.Suggest) == 0 { // a click on the task rows opens or closes the list, as ctrl+t does; the completions cover them
+		m.zones = append(m.zones, m.todoZone(ideH+chatH, w, len(tasks)))
+	}
 	in, cx := renderInput(&m.Input, w-4, "Ask claude…", m.PanelFocus)
 	var parts []string
 	if ideH > 0 {
@@ -142,6 +150,7 @@ func (m *Model) View() tea.View {
 	if chatH > 0 {
 		parts = append(parts, chat)
 	}
+	parts = append(parts, tasks...)
 	m.Status.Noted = m.sel.noted(m.Now)
 	border := theme.Border
 	if bangInput(m.Input.Text) && !m.PanelFocus {
@@ -153,7 +162,7 @@ func (m *Model) View() tea.View {
 	under := []*lipgloss.Layer{lipgloss.NewLayer(base)}
 	if len(m.Suggest) > 0 {
 		box := renderSuggest(m.Suggest, m.SuggestSel, strings.TrimPrefix(string(m.Input.Text), "/"), w-4)
-		y := max(0, ideH+chatH-lipgloss.Height(box))
+		y := max(0, ideH+chatH+len(tasks)-lipgloss.Height(box))
 		under = append(under, lipgloss.NewLayer(box).X(2).Y(y))
 		m.zones = append(m.zones, m.suggestZone(2, y, lipgloss.Width(box)))
 	}
@@ -175,7 +184,7 @@ func (m *Model) View() tea.View {
 		over = lipgloss.NewLayer(box).X((w - lipgloss.Width(box)) / 2).Y((h - lipgloss.Height(box)) / 2)
 		m.zones = nil // a click anywhere closes it
 	case !m.PanelFocus: // the keys go to the agents panel: no caret in the prompt
-		v.Cursor = tea.NewCursor(2+cx, ideH+chatH+1)
+		v.Cursor = tea.NewCursor(2+cx, ideH+chatH+len(tasks)+1)
 	}
 	selecting := m.sel.drag && m.sel.out(m.Now) < 1 && m.Popup == nil && !m.ShowHelp
 	if len(under) == 1 && over == nil && !selecting {

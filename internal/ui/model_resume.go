@@ -22,10 +22,11 @@ type sessionsMsg struct {
 	err   error
 }
 
-// historyMsg brings what was said in the conversation picked.
+// historyMsg brings what was said in the conversation picked, and the task calls made in it.
 type historyMsg struct {
 	info    sessions.Info
 	history []sessions.Message
+	tasks   []sessions.Call
 	err     error
 }
 
@@ -120,7 +121,11 @@ func (m *Model) pick(s sessions.Info) tea.Cmd {
 	dir := sessions.Dir(m.Sim.State().Root)
 	return func() tea.Msg {
 		h, err := sessions.History(dir, s.ID)
-		return historyMsg{info: s, history: h, err: err}
+		var tasks []sessions.Call
+		if err == nil {
+			tasks, err = sessions.Calls(dir, s.ID, todoTools...)
+		}
+		return historyMsg{info: s, history: h, tasks: tasks, err: err}
 	}
 }
 
@@ -141,6 +146,7 @@ func (m *Model) resumed(msg historyMsg) {
 	m.Popup, m.queue = nil, nil
 	m.exited(m.clock())
 	m.Chat, m.chatLines, m.ChatScroll, m.btwSaid = nil, chatCache{}, 0, nil
+	m.todoResumed(msg.tasks)
 	cmd := false // the last prompt was a slash command: it stays out of the chat, as live
 	for _, h := range msg.history {
 		if h.Role == sessions.Prompt {

@@ -197,6 +197,62 @@ func texts(raw json.RawMessage) []string {
 	return out
 }
 
+// Call is a tool call of the main agent's in a saved conversation, with what its result said.
+type Call struct {
+	Name   string
+	Input  map[string]any
+	Output string // the result's text
+	Error  bool   // the result is an error
+}
+
+// Calls reads the main agent's calls of the tools named in conversation id of dir that have a
+// result, in the order of their results.
+func Calls(dir, id string, names ...string) ([]Call, error) {
+	data, err := os.ReadFile(filepath.Join(dir, id+".jsonl"))
+	if err != nil {
+		return nil, err
+	}
+	calls := map[string]Call{} // waiting for their results, by id
+	var out []Call
+	for line := range bytes.Lines(data) {
+		var r struct {
+			Type      string `json:"type"`
+			Sidechain bool   `json:"isSidechain"`
+			Message   struct {
+				Content json.RawMessage `json:"content"`
+			} `json:"message"`
+		}
+		if json.Unmarshal(line, &r) != nil || r.Sidechain {
+			continue
+		}
+		var blocks []struct {
+			Type      string          `json:"type"`
+			ID        string          `json:"id"`
+			Name      string          `json:"name"`
+			Input     map[string]any  `json:"input"`
+			ToolUseID string          `json:"tool_use_id"`
+			Content   json.RawMessage `json:"content"`
+			IsError   bool            `json:"is_error"`
+		}
+		if json.Unmarshal(r.Message.Content, &blocks) != nil { // a plain string: a prompt
+			continue
+		}
+		for _, b := range blocks {
+			switch {
+			case r.Type == "assistant" && b.Type == "tool_use" && slices.Contains(names, b.Name):
+				calls[b.ID] = Call{Name: b.Name, Input: b.Input}
+			case r.Type == "user" && b.Type == "tool_result":
+				if c, ok := calls[b.ToolUseID]; ok {
+					delete(calls, b.ToolUseID)
+					c.Output, c.Error = strings.Join(texts(b.Content), "\n"), b.IsError
+					out = append(out, c)
+				}
+			}
+		}
+	}
+	return out, nil
+}
+
 // noise are the tags the CLI wraps around what it puts in the user's turn by itself.
 var noise = []string{"<task-notification>", "<system-reminder>", "<local-command-caveat>", "<ide_opened_file>", "<ide_selection>"}
 
