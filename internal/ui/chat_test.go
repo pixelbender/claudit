@@ -270,6 +270,110 @@ func TestChatMarkdownWidth(t *testing.T) {
 	}
 }
 
+// A "! command" of claude's is found where it is drawn: every row of a fenced block whose first
+// line that says something starts with "!", its bar pink, the whole block its text; the cells of
+// an inline `! command`, pink too. Other code is not one.
+func TestChatMarkdownBangs(t *testing.T) {
+	lines, hits := drawMarkdownBangs("Log in:\n```bash\n\n! cd sub\nmake login\n\n```\nthen `! gh auth status` or `!= nil`\n```\ngit status\n```", 40)
+	want := []drawBangHit{{1, 0, 40, "! cd sub\nmake login"}, {2, 0, 40, "! cd sub\nmake login"}, {3, 0, 40, "! cd sub\nmake login"}, {4, 0, 40, "! cd sub\nmake login"}, {5, 5, 21, "! gh auth status"}}
+	if !slices.Equal(hits, want) {
+		t.Errorf("hits %+v, want %+v\n%s", hits, want, ansi.Strip(strings.Join(lines, "\n")))
+	}
+	if !strings.HasPrefix(lines[2], styleBang.Render("│ ")) || !strings.HasPrefix(lines[6], styleRule.Render("│ ")) {
+		t.Errorf("bars %q %q", lines[2], lines[6])
+	}
+	if !strings.Contains(lines[5], styleBang.Render(" gh")) || !strings.Contains(lines[5], styleCode.Render("!=")) {
+		t.Errorf("inline %q", lines[5])
+	}
+	if got := ansi.Strip(lines[5])[5:21]; got != "! gh auth status" {
+		t.Errorf("the inline command's cells hold %q", got)
+	}
+	// What the chat cannot show is not in the command: escape sequences, controls; a tab is.
+	if _, hits := drawMarkdownBangs("```\n! printf '\x1b[31m%s\t\x07' red\n```", 40); len(hits) != 1 || hits[0].text != "! printf '%s\t' red" {
+		t.Errorf("controls: %+v", hits)
+	}
+
+	// Wrapped, an inline command is found on each of its rows, the text whole on each; a word
+	// longer than a row too, cut.
+	cmd := "! gh auth login --hostname example.com --scopes repo,read:org,workflow,admin:public_key"
+	lines, hits = drawMarkdownBangs("Run `"+cmd+"` once.", 24)
+	if len(hits) < 3 {
+		t.Fatalf("hits %+v in\n%s", hits, ansi.Strip(strings.Join(lines, "\n")))
+	}
+	var drawn strings.Builder
+	for i, h := range hits {
+		if h.y != i || h.text != cmd {
+			t.Errorf("hit %d %+v", i, h)
+		}
+		drawn.WriteString(ansi.Strip(lines[h.y])[h.x0:h.x1])
+	}
+	if strings.ReplaceAll(drawn.String(), " ", "") != strings.ReplaceAll(cmd, " ", "") {
+		t.Errorf("the hits cover %q", drawn.String())
+	}
+}
+
+// Only where a click puts the command in the prompt, a reply's rows, is a "! command" pink; in a
+// popup, in what a command prints and in a table's cells it is code as any.
+func TestChatMarkdownBangsPinkWhereClicked(t *testing.T) {
+	pink := strings.Split(styleBang.Render("x"), "x")[0]
+	if pink == "" {
+		t.Fatal("no colour to tell")
+	}
+	src := "Run `! ls` or\n```\n! ls\n```\n\n| a | b |\n|---|---|\n| `! ls` | x |"
+	plain := map[string]string{
+		"drawMarkdown": strings.Join(drawMarkdown(src, 40), "\n"),
+		"command":      strings.Join(drawCommand(src, 40), "\n"),
+		"answer":       renderPopup(&BtwPopup{Question: "q", Answer: src}, 60, 20),
+		"plan":         renderPopup(&PermissionPopup{Tool: "ExitPlanMode", Detail: src}, 60, 20),
+	}
+	for name, got := range plain {
+		if strings.Contains(got, pink) || !strings.Contains(got, styleCode.Render(" ls")) || !strings.Contains(got, styleCode.Render("! ls")) {
+			t.Errorf("%s: pink where no click goes, or no code:\n%q", name, got)
+		}
+	}
+	lines, hits := drawMarkdownBangs(src, 40)
+	if len(hits) != 2 || !strings.Contains(lines[0], styleBang.Render("!")) || !strings.HasPrefix(lines[1], styleBang.Render("│ ")) {
+		t.Errorf("a reply: hits %+v\n%q", hits, lines)
+	}
+	table := strings.Join(lines[len(lines)-3:], "\n")
+	if strings.Contains(table, pink) || !strings.Contains(table, styleCode.Render("! ls")) {
+		t.Errorf("the table of a reply:\n%q", table)
+	}
+	if got := strings.Join(drawEntry(ChatEntry{Kind: AssistantEntry, Text: "Run `! ls`"}, 40), "\n"); !strings.Contains(got, pink) {
+		t.Errorf("a reply's inline command is not pink: %q", got)
+	}
+}
+
+// What a click puts in the prompt has no format characters (bidirectional controls, zero-width
+// marks), which reorder or hide what the user is about to run.
+func TestChatMarkdownBangsNoFormat(t *testing.T) {
+	_, hits := drawMarkdownBangs("```\n! echo \u202ehi\u202c \u2066x\u2069\u200b\n```\nor `! ls \u202e-la\u200b`", 40)
+	if len(hits) != 2 || hits[0].text != "! echo hi x" || hits[1].text != "! ls -la" {
+		t.Errorf("hits %+v", hits)
+	}
+}
+
+// A click on a reply's line finds its "! command" past the "› ", a long line cut short its whole
+// text; a Bash call's line or a prompt has none.
+func TestChatBangAt(t *testing.T) {
+	cmd := "! go test ./... -run TestChatBangAt -count 1 -v"
+	reply := ChatEntry{Kind: AssistantEntry, Text: "Run:\n\n```\n" + cmd + "\n```"} // the blank line is not drawn
+	if got := drawBangAt(reply, 30, 1, 10); got != cmd {
+		t.Errorf("the block's row gives %q", got)
+	}
+	if got := drawBangAt(reply, 30, 0, 3); got != "" {
+		t.Errorf("the line above gives %q", got)
+	}
+	if got := drawBangAt(reply, 30, 1, 1); got != "" {
+		t.Errorf("the gutter gives %q", got)
+	}
+	for _, e := range []ChatEntry{{Kind: UserEntry, Text: reply.Text}, {Kind: AssistantEntry, Text: "`! ls`", Bash: true}} {
+		if got := drawBangAt(e, 30, 1, 10) + drawBangAt(e, 30, 0, 3); got != "" {
+			t.Errorf("%+v gives %q", e, got)
+		}
+	}
+}
+
 func TestChatInput(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -540,5 +644,147 @@ func TestChatTimes(t *testing.T) {
 	}
 	if narrow, _, _ := renderChat(new(chatCache), entries, 25, 10, 0); strings.Contains(ansi.Strip(narrow), "14:0") {
 		t.Errorf("a narrow chat shows times:\n%s", ansi.Strip(narrow))
+	}
+}
+
+// A long line of code wraps beside the bar, as the prose does, and keeps all its text: cut, a
+// draft to send or a command lost its end.
+func TestDrawMarkdownCodeWraps(t *testing.T) {
+	line := "олег, предлагаю разбить паритет на 7 подисторий supercalifragilisticexpialidocious 😀😀 end"
+	for _, w := range []int{5, 9, 24, 40} {
+		lines := drawMarkdown("```\n"+line+"\n```", w)
+		var got strings.Builder
+		for _, l := range lines {
+			l = ansi.Strip(l)
+			if ansi.StringWidth(l) > w || !strings.HasPrefix(l, "│ ") {
+				t.Errorf("w %d: line %q", w, l)
+			}
+			got.WriteString(strings.TrimPrefix(l, "│ "))
+		}
+		if strings.ReplaceAll(got.String(), " ", "") != strings.ReplaceAll(line, " ", "") {
+			t.Errorf("w %d: the code lost text: %q", w, got.String())
+		}
+		if len(lines) < 2 {
+			t.Errorf("w %d: the code did not wrap: %q", w, lines)
+		}
+	}
+	// A comment or a string goes on in its colour past the wrap: its words are not code there.
+	bar := styleRule.Render("│ ")
+	sgr := func(s string) string { return s[:strings.IndexByte(s, 'm')+1] }
+	for _, c := range []struct{ line, rest string }{
+		{"x := 1 // if the value is nil we return early from func", sgr(ideview.Highlight("// c", "go"))},
+		{`s := "for range if return else go func"`, sgr(ideview.Highlight(`"s"`, "go"))},
+	} {
+		lines := drawMarkdown("```go\n"+c.line+"\n```", 20)
+		if len(lines) < 3 {
+			t.Fatalf("%s: did not wrap: %q", c.line, lines)
+		}
+		for _, l := range lines[1:] {
+			part := strings.TrimPrefix(l, bar)
+			if !strings.HasPrefix(part, c.rest) || strings.Count(part, "\x1b[38") != 1 {
+				t.Errorf("%s: a part not in the colour it goes on in: %q", c.line, l)
+			}
+		}
+	}
+	// Too narrow to wrap, a line is cut as before, not spread over lines of nothing.
+	if lines := drawMarkdown("```\nabc def\n```", 3); len(lines) != 1 {
+		t.Errorf("w 3: %q", lines)
+	}
+	if lines := drawMarkdown("```\nab cd\n```", 4); len(lines) != 2 {
+		t.Errorf("w 4: %q", lines)
+	}
+}
+
+// chatCodeJoined is a block of code taken back from its rows as drawn: past the bar, the blanks
+// the wrap left out before each part, a part that goes on with its line joined to it.
+func chatCodeJoined(lines []string, b drawCodeBlock) string {
+	var rows []string
+	for k, r := range b.rows {
+		part, ok := strings.CutPrefix(ansi.Strip(lines[b.from+k]), "│ ")
+		if !ok {
+			return "no bar on " + lines[b.from+k]
+		}
+		part = r.lead + strings.TrimRight(part, " ")
+		if r.cont && len(rows) > 0 {
+			rows[len(rows)-1] += part
+			continue
+		}
+		rows = append(rows, part)
+	}
+	return strings.Join(rows, "\n")
+}
+
+// A block of code is found where it is drawn, a row of its bar each, with what it holds as
+// written; a line of it that wraps comes back whole from its rows, its indent and the blanks
+// where it broke too. A reply drops its blank lines, not a block's: it keeps the block on its rows; a "! command"
+// block is one, and too narrow to wrap, each line one row.
+func TestChatMarkdownCode(t *testing.T) {
+	draft := "Коллеги, привет!  Черновик   длинный, перенос   по словам и   без потерь"
+	block := draft + "\n        indented words that wrap here too\n\nshort"
+	src := "Send this:\n\n```text\n\n" + block + "\n\n```\nthen `x` and\n```\n! make login\n```"
+	for _, w := range []int{24, 3, 80} {
+		lines, _, code := drawMarkdownCode(src, w, true)
+		if len(code) != 2 {
+			t.Fatalf("w %d: blocks %+v", w, code)
+		}
+		if b := code[0]; b.text != block || b.to-b.from != len(b.rows) || chatCodeJoined(lines, b) != "\n"+block+"\n" && w > 3 {
+			t.Errorf("w %d: %q from %d to %d, rows give %q\n%s", w, b.text, b.from, b.to, chatCodeJoined(lines, b), ansi.Strip(strings.Join(lines, "\n")))
+		}
+		if b := code[1]; b.text != "! make login" || w > 3 && !strings.Contains(ansi.Strip(lines[b.from]), "make") {
+			t.Errorf("w %d: the ! block %+v", w, b)
+		}
+		if w == 3 && slices.ContainsFunc(code[0].rows, func(r drawCodeRow) bool { return r.cont || r.lead != "" }) {
+			t.Errorf("too narrow, a row goes on: %+v", code[0].rows)
+		}
+		if w == 24 && !slices.ContainsFunc(code[0].rows, func(r drawCodeRow) bool { return r.cont }) {
+			t.Errorf("nothing wrapped: %+v", code[0].rows)
+		}
+
+		dense, _, code := drawReplyCode(src, w)
+		b := code[0]
+		if b.text != block || w > 3 && chatCodeJoined(dense, b) != "\n"+block+"\n" { // the blank lines in it are rows of its bar
+			t.Errorf("w %d: a reply's block from %d to %d gives %q", w, b.from, b.to, chatCodeJoined(dense, b))
+		}
+		if b.from == 0 || strings.Contains(ansi.Strip(dense[b.from-1]), "│") || b.to < len(dense) && strings.HasPrefix(ansi.Strip(dense[b.to]), "│") {
+			t.Errorf("w %d: the block is not on rows %d to %d", w, b.from, b.to)
+		}
+	}
+	if _, code := drawEntryBlocks(ChatEntry{Kind: AssistantEntry, Text: src, Bash: true}, 40); code != nil {
+		t.Errorf("a Bash line has blocks: %+v", code)
+	}
+	if _, code := drawEntryBlocks(ChatEntry{Kind: UserEntry, Text: src}, 40); code != nil {
+		t.Errorf("a prompt has blocks: %+v", code)
+	}
+}
+
+// What a block of code holds is its lines as written, indent kept, the blank ones around them
+// trimmed; escape sequences, controls and the characters that reorder what is written go, a tab
+// stays.
+func TestChatFenceText(t *testing.T) {
+	got := drawFenceText([]string{"", "  ", "  x\r", "\x1b[31my\x1b[0m‮\t​z", "", "w", " ", ""})
+	if want := "  x\ny\tz\n\nw"; got != want {
+		t.Errorf("%q, want %q", got, want)
+	}
+	if got := drawFenceText([]string{"", " "}); got != "" {
+		t.Errorf("blank: %q", got)
+	}
+}
+
+// The blanks a wrap left out are found before each part, and none for a part that is not as
+// written.
+func TestChatCodeLeads(t *testing.T) {
+	for _, c := range []struct {
+		line  string
+		parts []string
+		want  []string
+	}{
+		{"a  b   c", []string{"a", "b", "c"}, []string{"", "  ", "   "}},
+		{"    deep words", []string{"", "deep", "words"}, []string{"", "    ", " "}},
+		{"a b", []string{"a", "zz"}, []string{"", ""}},
+		{"a x b", []string{"a", "b"}, []string{"", ""}}, // what is between is not blank
+	} {
+		if got := drawCodeLeads(c.line, c.parts); !slices.Equal(got, c.want) {
+			t.Errorf("%q in %q: %q, want %q", c.line, c.parts, got, c.want)
+		}
 	}
 }

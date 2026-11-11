@@ -38,6 +38,15 @@ claudit
 
 Arguments go on to claude, so `claudit --model haiku` works too.
 
+A click on a file or folder the chat names opens it: a folder in the file manager, a document,
+picture or source file in its app; anything else, a script or an app among them, is only shown in
+the file manager. Set `CLAUDIT_OPEN=code -g` to open those files in your editor instead; when the
+chat names a line, the command gets `path:line` as its last argument, so it must accept that.
+The path is an argument of the command, so make it an editor or an opener: `sh -c`, `python -c`
+or `osascript -e` would run the path as code. On Windows a path on a network share, a project or
+home folder on one too, is not underlined; a link already on disk that leads to a share is still
+looked up.
+
 The rest you'll figure out.
 
 ## Build and test

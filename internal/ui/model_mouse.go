@@ -13,20 +13,26 @@ import (
 
 // zone is a place on screen a click acts on, as the last frame drew it; click gets the cell
 // clicked, relative to the zone. A zone with wheel scrolls n rows back at a turn of the wheel there;
-// one with text has text a drag selects: the box of it around the cell, relative to the zone.
+// one with text has text a drag selects: the box of it around the cell, relative to the zone. The
+// chat's selection scrolls with it.
 type zone struct {
 	x, y, w, h int
 	click      func(x, y int) tea.Cmd
 	wheel      func(x, y, n int)
 	text       func(x, y int) image.Rectangle
+	chat       bool
 }
 
 // wheelStep is how many chat lines a notch of the wheel scrolls.
 const wheelStep = 3
 
-// scrollChat scrolls the chat n lines up (down when n < 0), within what there is to see.
+// scrollChat scrolls the chat n lines up (down when n < 0), within what there is to see; the end
+// of a drag in it stays under the mouse.
 func (m *Model) scrollChat(n int) {
 	m.ChatScroll = max(0, min(min(m.ChatScroll, m.chatMax)+n, m.chatMax)) // chatMax shrinks when the window grows
+	if m.mouseDown && m.sel.chat && m.sel.released.IsZero() {
+		m.dragTo(m.sel.mouse.X, m.sel.mouse.Y)
+	}
 }
 
 // wheelFrame is how often a scroll in progress draws. A trackpad sends wheel events faster than a
@@ -116,6 +122,8 @@ func (m *Model) wheel(x, y, d int) {
 		case m.ShowHelp:
 		case len(m.Suggest) > 0:
 			m.SuggestSel = min(max(m.SuggestSel+d, 0), len(m.Suggest)-1)
+		case m.mouseDown && m.sel.chat && m.sel.released.IsZero(): // a drag in the chat: it scrolls wherever the mouse is
+			m.scrollChat(-d * wheelStep)
 		default:
 			for i := len(m.zones) - 1; i >= 0; i-- {
 				if z := m.zones[i]; z.wheel != nil && x >= z.x && x < z.x+z.w && y >= z.y && y < z.y+z.h {
@@ -184,13 +192,21 @@ func (m *Model) clickIDE(key string) tea.Cmd {
 	return nil
 }
 
-// clickChat acts on a press on a line of the chat, a Bash line of call ("" for another line): its
-// release, unless the press starts a selection, shows where main ran it in the IDE of o, w×h cells
-// (none when h is 0). The keys go back to the prompt.
-func (m *Model) clickChat(call string, o ideview.Options, w, h int) tea.Cmd {
+// clickChat acts on a press on a line of the chat, a Bash line of call, a ! command of claude's
+// ("" for another line) or a row of a block of code of a reply's (nil for none): its release,
+// unless the press starts a selection, shows where main ran the call in the IDE of o, w×h cells
+// (none when h is 0), puts the command in the prompt, or copies what the block holds. The keys
+// go back to the prompt.
+func (m *Model) clickChat(call, bang string, block *chatBlock, o ideview.Options, w, h int) tea.Cmd {
 	m.PanelFocus = false
 	m.onRelease = nil
-	if call != "" && h > 0 {
+	switch {
+	case bang != "":
+		m.onRelease = func() { m.takeBang(bang) }
+	case block != nil:
+		b := *block
+		m.onRelease = func() { m.copyBlock(b) }
+	case call != "" && h > 0:
 		m.onRelease = func() { m.showCall(call, o, w, h) }
 	}
 	return nil

@@ -98,7 +98,7 @@ func drawCommandText(text string, w int) []string {
 			out = append(out, ansi.Truncate(indent+st.Render(body), w, "…"))
 		case drawSettingRe.MatchString(body) && indent != "":
 			m := drawSettingRe.FindStringSubmatch(body)
-			out = append(out, drawFlow([]drawSpan{{m[1], styleFg}, {"=" + m[2], styleDim}}, w, indent, indent+"  ")...)
+			out = append(out, drawFlow([]drawSpan{{text: m[1], st: styleFg}, {text: "=" + m[2], st: styleDim}}, w, indent, indent+"  ")...)
 		case strings.HasPrefix(body, "- "):
 			out = append(out, drawFlow(drawSpans(body[2:], styleFg), w, indent+styleAccent.Render("• "), indent+"  ")...)
 		default:
@@ -122,7 +122,7 @@ func drawNote(s string, base lipgloss.Style) []drawSpan {
 	head, tail, ok := strings.Cut(s, " · ")
 	spans := drawSpans(head, base)
 	if ok {
-		spans = append(spans, drawSpan{" · " + drawOneLine(tail), styleDim})
+		spans = append(spans, drawSpan{text: " · " + drawOneLine(tail), st: styleDim})
 	}
 	return spans
 }
@@ -140,7 +140,7 @@ func drawMeter(name, pct, resets string, w int) []string {
 		out = append(out, styleFg.Render(label[1:]))
 	}
 	if r, n := utf8.DecodeRuneInString(resets); resets != "" {
-		out = append(out, drawFlow([]drawSpan{{string(unicode.ToUpper(r)) + resets[n:], styleDim}}, w, "", "")...)
+		out = append(out, drawFlow([]drawSpan{{text: string(unicode.ToUpper(r)) + resets[n:], st: styleDim}}, w, "", "")...)
 	}
 	return out
 }

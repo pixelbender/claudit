@@ -62,6 +62,25 @@ func bangCommand(text string) (string, bool) {
 	return rest, true
 }
 
+// takeBang puts a ! command of claude's in the prompt, the cursor at its end, to edit or send as
+// if typed: the shell mode turns on, its "!" standing for the blanks after it ("! ls" as "!ls").
+// What the prompt said goes to the kill buffer, for ctrl+y; a queued prompt taken into it to edit
+// stays as it was, in the queue, which is not sent by the click even if claude's turn has ended
+// meanwhile: it goes after a quiet period of its own. Under a popup or the help it does nothing.
+func (m *Model) takeBang(command string) {
+	if m.Popup != nil || m.ShowHelp {
+		return
+	}
+	m.Input.kill(0, len(m.Input.Text))
+	killed := m.Input.killed
+	if m.queueAt >= 0 {
+		m.pendingAt = m.clock() // as when its edit is saved: the queue is not due yet
+	}
+	m.histAt, m.queueAt = len(m.history), -1
+	text := []rune("!" + strings.TrimLeft(strings.TrimPrefix(command, "!"), " \t"))
+	m.Input = Input{Text: text, Cursor: len(text), killed: killed}
+}
+
 // bang runs a ! command off the UI's way: one at a time, not in a replay.
 func (m *Model) bang(command string) tea.Cmd {
 	switch {

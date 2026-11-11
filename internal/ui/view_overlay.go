@@ -103,16 +103,21 @@ var drawHelpRows = [][2]string{
 	{"", "Prompt"},
 	{"enter", "send the prompt; while claude works, it waits its turn"},
 	{"ctrl+j", "new line (or alt+enter, or \\ then enter)"},
-	{"ctrl+a e", "edit as in a shell: alt+b/f by words, ctrl+w/u/k cut, ctrl+y puts it back"},
+	{"ctrl+a ctrl+e", "edit as in a shell: alt+b/f by words, ctrl+w/u/k cut, ctrl+y puts it back"},
+	{"cmd+a", "select the whole prompt and copy it: typing replaces it, backspace clears it; the terminal must pass cmd+a on"},
 	{"ctrl+v", "paste the picture on the clipboard; drop picture files to attach them"},
 	{"↑ ↓", "previous prompts; queued prompts first, edited in their place"},
 	{"!", "a shell command, run in the project; claude gets it and its output and goes on"},
+	{"click a !", "a ! command in claude's reply goes into the prompt, to edit or send"},
+	{"click code", "a block of code in claude's reply is copied as written"},
 	{"/", "slash commands: ↑/↓ pick, tab complete, enter run; a typo is held back, enter again sends it"},
 	{"esc", "show every agent again, else stop a ! command, else interrupt claude, else clear the prompt, else quit (twice; confirms unfinished tasks)"},
 	{"shift+tab", "permission mode: manual → accept edits → plan → auto; over a request, also answers what the new mode allows"},
 	{"pgup pgdn", "scroll the conversation (or the wheel)"},
-	{"drag", "select text in the conversation or a pane; letting go copies it"},
+	{"drag", "select text in the conversation or a pane; letting go copies it, a block of code without its bar and its lines whole; held past the conversation's top or bottom, it scrolls"},
+	{"ctrl+a", "on an empty prompt: select the whole conversation and copy it (in cmux, cmd+left too)"},
 	{"click", "what a Bash call does, in the conversation: where it ran, in the terminal"},
+	{"click a path", "an underlined file or folder in the conversation opens: a folder in the file manager, a document, picture or source file in its app; anything else, a script or an app among them, is only shown in the file manager; in a ! command or a block of code, the click takes those"},
 	{"", "Questions and permissions"},
 	{"y  n", "allow, deny (esc denies too); ↑/↓ pgup/pgdn scroll; or click"},
 	{"", "Camera"},
@@ -140,7 +145,7 @@ func renderHelp(maxWidth, maxHeight int) string {
 			continue
 		}
 		key := styleAccent.Render(drawFit(r[0], keyW))
-		lines = append(lines, drawFlow([]drawSpan{{r[1], styleFg}}, inner, "  "+key, strings.Repeat(" ", 2+keyW))...)
+		lines = append(lines, drawFlow([]drawSpan{{text: r[1], st: styleFg}}, inner, "  "+key, strings.Repeat(" ", 2+keyW))...)
 	}
 	lines = append(lines, "", styleDim.Render("esc close"))
 	if len(lines) > maxHeight-2 { // a short screen: no blank lines

@@ -103,6 +103,7 @@ func (m *Model) pasted(msg imagesMsg) {
 	if msg.err != nil {
 		m.local("Error: " + msg.err.Error())
 	}
+	m.Input.all = false // a picture goes with the text, never in place of it
 	for _, im := range msg.images {
 		m.Input.insert(m.attach(attachment{image: &im}) + " ")
 	}

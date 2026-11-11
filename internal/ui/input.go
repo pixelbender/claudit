@@ -13,6 +13,22 @@ type Input struct {
 	Text   []rune
 	Cursor int
 	killed []rune // what the last kill cut out, for ctrl+y
+	all    bool   // the whole text is selected: typing replaces it, a key that deletes clears it
+}
+
+// takeAll acts on the whole text, selected, with key k: a key that deletes clears it as a kill
+// would, for ctrl+y to put back, and reports true; typed text clears it the same way and goes in
+// its place. Another key leaves it.
+func (in *Input) takeAll(k tea.KeyPressMsg) bool {
+	switch k.String() {
+	case "backspace", "ctrl+h", "delete", "ctrl+d", "ctrl+u", "super+backspace", "ctrl+k", "ctrl+w", "alt+backspace", "alt+d":
+		in.kill(0, len(in.Text))
+		return true
+	}
+	if k.Text != "" {
+		in.kill(0, len(in.Text))
+	}
+	return false
 }
 
 // edit applies an editing key and reports whether the key was one. The keys are those of a
@@ -129,6 +145,10 @@ func (in *Input) wordEnd() int {
 
 // insert puts s at the cursor and moves the cursor past it.
 func (in *Input) insert(s string) {
+	if in.all { // a paste goes in place of the whole text selected, as typing does
+		in.kill(0, len(in.Text))
+		in.all = false
+	}
 	r := []rune(s)
 	in.Text = slices.Insert(in.Text, in.Cursor, r...)
 	in.Cursor += len(r)
