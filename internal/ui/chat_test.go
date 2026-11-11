@@ -454,8 +454,8 @@ func TestChatUsageStates(t *testing.T) {
 	}
 }
 
-// A window used 80% shows as the auto mode does, from 90% in Claude's orange; so does the context.
-// The names of the windows and of the context are grey.
+// A window used 80% shows as the auto mode does, from 90% in Claude's orange; so does the context,
+// from CLAUDIT_CONTEXT_WARN instead of 80% if it is set. The names of the windows and of the context are grey.
 func TestChatUsageColours(t *testing.T) {
 	got := drawUsage("5h 79% 4h12m · 7d 80% fable 95% 2d8h · $0.0123")
 	sep := styleDim.Render(" · ")
@@ -466,9 +466,28 @@ func TestChatUsageColours(t *testing.T) {
 	}
 	ctx := styleDim.Render("ctx ")
 	for f, want := range map[float64]string{0.794: ctx + styleFg.Render("79%"), 0.8: ctx + styleModeAuto.Render("80%"), 0.95: ctx + styleAccent.Render("95%")} {
-		if got := drawContext(f); got != want {
+		if got := drawContext(f, 0); got != want {
 			t.Errorf("drawContext(%v) = %q, want %q", f, got, want)
 		}
+	}
+	for _, tt := range []struct {
+		f    float64
+		warn int
+		want string
+	}{
+		{0.294, 30, ctx + styleFg.Render("29%")},
+		{0.296, 30, ctx + styleModeAuto.Render("30%")}, // as shown, rounded
+		{0.85, 30, ctx + styleModeAuto.Render("85%")},
+		{0.9, 30, ctx + styleAccent.Render("90%")},
+		{0.85, 95, ctx + styleFg.Render("85%")}, // past 80% but not the warning's
+		{0.92, 95, ctx + styleAccent.Render("92%")},
+	} {
+		if got := drawContext(tt.f, tt.warn); got != tt.want {
+			t.Errorf("drawContext(%v, %d) = %q, want %q", tt.f, tt.warn, got, tt.want)
+		}
+	}
+	if got := renderStatus(Status{Model: "m", State: "idle", Context: 0.31, ContextWarn: 30}, nil, 80); !strings.Contains(got, ctx+styleModeAuto.Render("31%")) {
+		t.Errorf("status line without the warning: %q", got)
 	}
 }
 

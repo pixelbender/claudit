@@ -62,6 +62,7 @@ func run(args []string) error {
 	}
 
 	m := ui.New(sess.Send, cwd, replay)
+	m.ContextWarn = ui.ContextWarn(os.Getenv(ui.ContextWarnEnv))
 	if !replay {
 		m.StartModel = claude.Model(args, cwd)
 		m.UseHistory(history.File(), history.Project(cwd))

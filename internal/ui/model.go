@@ -52,6 +52,8 @@ type Model struct {
 	Away       bool               // the terminal lost the focus: what needs the user is announced
 	StartModel string             // the model claude starts with as args or settings name it ("opus"), shown until a turn tells
 
+	ContextWarn int // ContextWarnEnv's percent of main's context: from it the status line warns and the chat says so once; 0 for none
+
 	chatMax    int               // largest useful ChatScroll, written by View
 	chatLines  chatCache         // drawn chat entries, kept by View
 	zones      []zone            // what clicks act on, written by View
@@ -117,6 +119,8 @@ type Model struct {
 
 	attached map[string]attachment // what the placeholders of long pastes and pictures stand for, by placeholder
 
+	contextWarned bool // the chat said that main's context got to ContextWarn: not again until it goes below
+
 	bangRun  *bangRun // the ! command running; nil for none
 	bangs    int      // ! commands run, for their ids
 	bangSaid []string // the ! commands run since the last prompt, as claude is to see them with the next
@@ -163,6 +167,8 @@ type Status struct {
 	Replay  bool
 	Mode    string // permission mode: "default", "acceptEdits", "plan", …; "" until known
 	Alert   bool   // State says what went wrong, such as an API error: red
+
+	ContextWarn int // the percent from which Context is drawn as a warning; 0 for drawFull's 80%
 
 	Context float64 // fraction of main's context window in use; 0 until the window is known
 }
@@ -329,6 +335,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.mouseDown = false
 	}
 	m.sync()
+	m.warnContext()
 	if m.notice != "" {
 		if m.Away {
 			cmd = tea.Batch(cmd, tea.Raw(drawNotice(m.notice)))

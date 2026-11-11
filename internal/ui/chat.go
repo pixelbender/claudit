@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"cmp"
 	"fmt"
 	"math"
 	"slices"
@@ -345,7 +346,7 @@ func renderStatus(st Status, hints []string, width int) string {
 		parts = append(parts, part{drawUsage(st.Usage), 3})
 	}
 	if st.Context > 0 {
-		parts = append(parts, part{drawContext(st.Context), 2})
+		parts = append(parts, part{drawContext(st.Context, st.ContextWarn), 2})
 	}
 	if st.Replay {
 		parts = append(parts, part{styleFg.Render("replay"), 4})
@@ -469,22 +470,32 @@ func drawUsage(usage string) string {
 const drawExtraUsage = "extra usage"
 
 // drawContext is how full main's context is, in few cells: "ctx" grey, the percentage coloured
-// by drawFull.
-func drawContext(f float64) string {
-	pct := int(math.Round(min(max(f, 0), 1) * 100))
-	return styleDim.Render("ctx ") + drawFull(pct).Render(fmt.Sprintf("%d%%", pct))
+// by drawFullFrom, as a warning from warn percent, or from drawFull's 80% if it is 0.
+func drawContext(f float64, warn int) string {
+	pct := contextPercent(f)
+	return styleDim.Render("ctx ") + drawFullFrom(pct, cmp.Or(warn, 80)).Render(fmt.Sprintf("%d%%", pct))
 }
 
 // drawFull is the colour of a share used up: as the auto mode from 80%, in Claude's own orange
 // from 90%.
 func drawFull(pct int) lipgloss.Style {
+	return drawFullFrom(pct, 80)
+}
+
+// drawFullFrom is drawFull with the auto mode's colour from warn percent instead of 80%.
+func drawFullFrom(pct, warn int) lipgloss.Style {
 	switch {
 	case pct >= 90:
 		return styleAccent
-	case pct >= 80:
+	case pct >= warn:
 		return styleModeAuto
 	}
 	return styleFg
+}
+
+// contextPercent is a fraction of the context in use as the status line shows it, in whole percent.
+func contextPercent(f float64) int {
+	return int(math.Round(min(max(f, 0), 1) * 100))
 }
 
 // The colours of the permission modes in Claude Code's dark theme.

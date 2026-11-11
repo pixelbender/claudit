@@ -38,6 +38,10 @@ claudit
 
 Arguments go on to claude, so `claudit --model haiku` works too.
 
+If you hand off or compact at a point of your own, `CLAUDIT_CONTEXT_WARN=30 claudit` colours the
+context from 30% instead of 80% and says so once when it gets there. The orange from 90% stays
+wherever you put it: it marks a context almost full.
+
 The rest you'll figure out.
 
 ## Build and test
