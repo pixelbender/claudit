@@ -33,7 +33,7 @@ func TestViewSize(t *testing.T) {
 		w, h := sz[0], sz[1]
 		m := drawTestModel(t, w, h)
 		v := m.View()
-		if !v.AltScreen || v.WindowTitle != "claudit" {
+		if !v.AltScreen || v.WindowTitle != "Hello! Please fix the division function · "+m.project() {
 			t.Errorf("%dx%d: AltScreen %v, WindowTitle %q", w, h, v.AltScreen, v.WindowTitle)
 		}
 		drawCheckSize(t, v.Content, w, h)

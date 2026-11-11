@@ -94,6 +94,8 @@ func (m *Model) slashCommand(text, cmd string) (done bool, run tea.Cmd) {
 		return true, m.openPlugins()
 	case cmd == "btw":
 		m.btw(args)
+	case (cmd == "rename" || cmd == "name") && args == "":
+		m.local(m.nameReport()) // Claude Code would have a model make one up
 	case args == "" && m.openPicker(cmd):
 	case cmd == "model" && args != "" && !m.Status.Replay && m.Status.State != "exited":
 		m.setModel(args)

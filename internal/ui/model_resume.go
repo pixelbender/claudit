@@ -163,5 +163,6 @@ func (m *Model) resumed(msg historyMsg) {
 	}
 	m.context, m.cost, m.usageKnown, m.session = protocol.Context{}, 0, false, msg.info.ID // a new process counts anew
 	m.Status.State = "starting"                                                            // until the new process answers
+	m.named, m.naming = msg.info.Name, ""
 	m.local("Resumed: " + msg.info.Title)
 }

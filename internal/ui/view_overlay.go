@@ -108,6 +108,7 @@ var drawHelpRows = [][2]string{
 	{"↑ ↓", "previous prompts; queued prompts first, edited in their place"},
 	{"!", "a shell command, run in the project; claude gets it and its output and goes on"},
 	{"/", "slash commands: ↑/↓ pick, tab complete, enter run; a typo is held back, enter again sends it"},
+	{"/rename", "name the conversation: the window's title and /resume show the name"},
 	{"esc", "show every agent again, else stop a ! command, else interrupt claude, else clear the prompt, else quit (twice; confirms unfinished tasks)"},
 	{"shift+tab", "permission mode: manual → accept edits → plan → auto; over a request, also answers what the new mode allows"},
 	{"pgup pgdn", "scroll the conversation (or the wheel)"},

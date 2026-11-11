@@ -50,6 +50,11 @@ type Model struct {
 	Suggest    []protocol.Command // slash commands completing the prompt, shown above it
 	SuggestSel int                // highlighted one
 	Away       bool               // the terminal lost the focus: what needs the user is announced
+	unseen     string             // a turn ended while Away: its mark (titleDone, titleFailed) in the title until the user comes back
+	named      string             // the name the conversation was given, by /rename or before it was resumed
+	naming     string             // the name a /rename on its way asks for, shown until claude says which it took
+	renameTurn bool               // the turn runs /rename: claude's reply tells the name it took
+	titled     titleScan          // what sessionName read of the chat, kept while the chat is the same
 	StartModel string             // the model claude starts with as args or settings name it ("opus"), shown until a turn tells
 
 	chatMax    int               // largest useful ChatScroll, written by View
@@ -328,6 +333,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.Away = true
 		m.mouseDown = false
 	}
+	if !m.Away || m.Status.Busy { // the user saw it, or claude works again
+		m.unseen = ""
+	}
 	m.sync()
 	if m.notice != "" {
 		if m.Away {
@@ -372,6 +380,7 @@ func (m *Model) handleEvent(ev protocol.Event) {
 	switch ev := ev.(type) {
 	case protocol.Init:
 		if m.session != "" && m.session != ev.SessionID {
+			m.named, m.naming = "", "" // the name was the other conversation's
 			m.Status.Tasks, m.wakeup = 0, time.Time{}
 			m.tasks = nil
 			m.inspection = nil
@@ -462,6 +471,7 @@ func (m *Model) handleEvent(ev protocol.Event) {
 	case protocol.Reset:
 		m.Chat, m.chatLines, m.ChatScroll, m.btwSaid = nil, chatCache{}, 0, nil
 		m.context = protocol.Context{}
+		m.named, m.naming = "", ""
 		m.local("Conversation cleared")
 	case protocol.Thinking:
 		m.working("thinking")
@@ -480,6 +490,9 @@ func (m *Model) handleEvent(ev protocol.Event) {
 		}
 		if m.confirmGoal(ev.Text) {
 			break
+		}
+		if m.renameTurn {
+			m.renamed(ev.Text)
 		}
 		m.Chat = append(m.Chat, ChatEntry{Kind: CommandEntry, Text: ev.Text, At: now})
 	case protocol.ToolUse:
@@ -556,7 +569,16 @@ func (m *Model) handleEvent(ev protocol.Event) {
 		case m.Status.Busy:
 			m.notice = "claude is done"
 		}
+		if m.Away && m.Status.Busy {
+			m.unseen = titleDone
+			if ev.IsError && !interrupted {
+				m.unseen = titleFailed
+			}
+		}
 		m.Status.State, m.Status.Busy = "idle", false
+		if m.renameTurn { // the name claude took came with its reply, if it took one
+			m.renameTurn, m.naming = false, ""
+		}
 		if m.effortTurn { // "auto" is the model's own level: claude knows which
 			m.effortTurn = false
 			m.send(protocol.GetSettings{RequestID: "settings-effort"})
@@ -598,6 +620,7 @@ func (m *Model) handleEvent(ev protocol.Event) {
 	case protocol.Exited:
 		first := m.Status.State != "exited"
 		m.Status.State, m.Status.Busy = "exited", false
+		m.naming, m.renameTurn = "", false // no reply to a /rename is coming
 		// The reason stays in the conversation.
 		report := "claude exited"
 		if ev.Err != nil {
@@ -952,6 +975,7 @@ func (m *Model) prompt(text string) tea.Cmd {
 	m.send(m.message(text))
 	m.Status.State, m.Status.Busy, m.Status.Alert, m.cmdTurn = turnState(cmd, isCmd), true, false, isCmd
 	m.effortTurn = isCmd && cmd == "effort"
+	m.renameSent(text)
 	return nil
 }
 
@@ -1065,7 +1089,8 @@ func (m *Model) flush() {
 		}
 	}
 	m.send(m.message(strings.Join(m.pending[:n], "\n\n")))
-	first, isCmd := slash(m.pending[0])
+	head := m.pending[0]
+	first, isCmd := slash(head)
 	at := len(m.Chat)
 	if m.Status.Busy && at > 0 && m.Chat[at-1].Kind == AssistantEntry {
 		at-- // keep the streaming reply last, as local command output does
@@ -1084,6 +1109,7 @@ func (m *Model) flush() {
 	}
 	if !m.Status.Busy { // forwarding text mid-turn leaves the active turn's state alone
 		m.cmdTurn, m.effortTurn = isCmd, isCmd && first == "effort"
+		m.renameSent(head)
 		m.Status.State, m.Status.Busy, m.Status.Alert = turnState(first, isCmd), true, false
 	}
 }

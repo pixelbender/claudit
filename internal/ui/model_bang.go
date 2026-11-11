@@ -173,7 +173,7 @@ func (m *Model) sendBangs() {
 	}
 	m.send(protocol.UserMessage{Text: strings.Join(m.bangSaid, "\n")})
 	m.bangSaid = nil
-	m.Status.State, m.Status.Busy, m.Status.Alert, m.cmdTurn, m.effortTurn = "thinking", true, false, true, false
+	m.Status.State, m.Status.Busy, m.Status.Alert, m.cmdTurn, m.effortTurn, m.renameTurn = "thinking", true, false, true, false, false
 }
 
 // bangStop stops the ! command running, if any, and reports whether there was one.

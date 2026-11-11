@@ -66,6 +66,11 @@ func TestList(t *testing.T) {
 		`{"type":"ai-title","aiTitle":"Made up first","sessionId":"ai"}`,
 		`{"type":"ai-title","aiTitle":"Made up later","sessionId":"ai"}`,
 		`{"type":"last-prompt","lastPrompt":"p","sessionId":"ai"}`)
+	// claude -p's /rename appends its record after what the conversation said.
+	sessionsWrite(t, dir, "renamed", t0.Add(30*time.Minute),
+		`{"type":"ai-title","aiTitle":"Made up","sessionId":"renamed"}`,
+		`{"type":"last-prompt","lastPrompt":"p","sessionId":"renamed"}`,
+		`{"type":"custom-title","customTitle":"DEV-1 tail cut","sessionId":"renamed"}`)
 	sessionsWrite(t, dir, "empty", t0.Add(3*time.Hour), `{"type":"queue-operation","operation":"enqueue"}`)
 	if err := os.Mkdir(filepath.Join(dir, "sub.jsonl"), 0o755); err != nil { // subagent dirs and the like
 		t.Fatal(err)
@@ -83,7 +88,8 @@ func TestList(t *testing.T) {
 	}
 	want := []Info{
 		{ID: "ai", Title: "Made up later", Modified: t0.Add(2 * time.Hour)},
-		{ID: "named", Title: "My name", Modified: t0.Add(time.Hour)},
+		{ID: "named", Title: "My name", Name: "My name", Modified: t0.Add(time.Hour)},
+		{ID: "renamed", Title: "DEV-1 tail cut", Name: "DEV-1 tail cut", Modified: t0.Add(30 * time.Minute)},
 		{ID: "old", Title: "second prompt", Modified: t0},
 	}
 	if !reflect.DeepEqual(got, want) {

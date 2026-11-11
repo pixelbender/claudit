@@ -107,22 +107,42 @@ func TestViewTitle(t *testing.T) {
 	cases := []struct {
 		st     Status
 		asking bool
+		unseen string
+		name   string
 		title  string
 		bar    bool
 	}{
-		{Status{State: "idle"}, false, "claudit", false},
-		{Status{State: "thinking", Busy: true}, false, "claudit · thinking", true},
-		{Status{State: "idle", Agents: 3}, false, "claudit · 3 agents", true},
-		{Status{State: "waiting for you", Busy: true}, true, "claudit · waiting for you", true},
+		{Status{State: "idle"}, false, "", "", "claudit · MTS", false},
+		{Status{State: "idle"}, false, "", "DEV-1 tail cut", "DEV-1 tail cut · MTS", false},
+		{Status{State: "thinking", Busy: true}, false, "", "DEV-1 tail cut", "● DEV-1 tail cut · MTS", true},
+		{Status{State: "thinking", Busy: true, Frame: 2}, false, "", "", "● claudit · MTS", true}, // it stands still
+		{Status{State: "idle", Agents: 3}, false, "", "", "● claudit · MTS", true},
+		{Status{State: "waiting for you", Busy: true}, true, "", "x", "? x · MTS", true},
+		{Status{State: "idle"}, false, titleDone, "x", "✓ x · MTS", false},
+		{Status{State: "idle"}, false, titleFailed, "x", "! x · MTS", false},
+		{Status{State: "API error 500", Alert: true}, false, titleDone, "x", "! x · MTS", false}, // an alert makes it a failure
+		{Status{State: "API error 500", Alert: true}, false, "", "x", "x · MTS", false},          // in sight, the status line says it
+		{Status{State: "exited"}, false, "", "x", "✗ x · MTS", false},
+		{Status{State: "exited"}, false, titleDone, "x", "✗ x · MTS", false},
+		{Status{State: "thinking", Busy: true}, false, titleDone, "x", "● x · MTS", true}, // a new turn: no longer done
+		{Status{State: "idle"}, false, "", "a\x1b[31mb\x07\tc\nd", "ab c d · MTS", false},
+		{Status{State: "idle"}, false, "", "a\u202eb\u200bc\u2066d\u2069", "abcd · MTS", false}, // no bidirectional or zero-width marks
+		{Status{State: "idle"}, false, "", strings.Repeat("long ", 20), "long long long long long long long long… · MTS", false},
 	}
 	for _, c := range cases {
-		title, bar := drawTitle(c.st, c.asking)
+		title, bar := drawTitle(c.st, c.asking, c.unseen, c.name, "MTS")
 		if title != c.title || (bar != nil) != c.bar {
-			t.Errorf("%+v: %q bar %v", c.st, title, bar)
+			t.Errorf("%+v %q: %q bar %v", c.st, c.name, title, bar)
 		}
 	}
-	if _, bar := drawTitle(Status{}, true); bar.State != tea.ProgressBarWarning {
+	if _, bar := drawTitle(Status{}, true, "", "", ""); bar.State != tea.ProgressBarWarning {
 		t.Errorf("a waiting popup should warn: %+v", bar)
+	}
+	if title, _ := drawTitle(Status{}, false, "", "", ""); title != "claudit" {
+		t.Errorf("no project: %q", title)
+	}
+	if title, _ := drawTitle(Status{}, false, "", "x", strings.Repeat("p", 30)); title != "x · "+strings.Repeat("p", 23)+"…" {
+		t.Errorf("long project: %q", title)
 	}
 }
 

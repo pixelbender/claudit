@@ -19,6 +19,7 @@ import (
 type Info struct {
 	ID       string
 	Title    string // the name it was given, else the title claude made up, else its last prompt
+	Name     string // the name it was given (/rename); "" for none
 	Modified time.Time
 }
 
@@ -66,8 +67,8 @@ func List(dir string) ([]Info, error) {
 		if err != nil {
 			continue
 		}
-		if t := title(data); t != "" {
-			list = append(list, Info{ID: id, Title: t, Modified: fi.ModTime()})
+		if name, t := title(data); t != "" {
+			list = append(list, Info{ID: id, Title: t, Name: name, Modified: fi.ModTime()})
 		}
 	}
 	slices.SortFunc(list, func(a, b Info) int { return cmp.Or(b.Modified.Compare(a.Modified), strings.Compare(a.ID, b.ID)) })
@@ -78,8 +79,9 @@ func List(dir string) ([]Info, error) {
 // conversation can take many megabytes.
 var titled = [][]byte{[]byte(`{"type":"custom-title"`), []byte(`{"type":"ai-title"`), []byte(`{"type":"last-prompt"`)}
 
-// title picks the latest name of each kind out of a conversation's records.
-func title(data []byte) string {
+// title picks the latest name of each kind out of a conversation's records: the one it was
+// given, and the one to list it by.
+func title(data []byte) (name, t string) {
 	var custom, ai, prompt string
 	for line := range bytes.Lines(data) {
 		if !slices.ContainsFunc(titled, func(p []byte) bool { return bytes.HasPrefix(line, p) }) {
@@ -94,7 +96,7 @@ func title(data []byte) string {
 			custom, ai, prompt = cmp.Or(r.Custom, custom), cmp.Or(r.AI, ai), cmp.Or(r.Prompt, prompt)
 		}
 	}
-	return strings.TrimSpace(cmp.Or(custom, ai, prompt))
+	return strings.TrimSpace(custom), strings.TrimSpace(cmp.Or(custom, ai, prompt))
 }
 
 // Role is who said a Message.

@@ -6,7 +6,6 @@ import (
 	"image"
 	"image/color"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -47,7 +46,7 @@ func (m *Model) View() tea.View {
 	v.AltScreen = true
 	v.ReportFocus = true // for Away
 	v.MouseMode = tea.MouseModeCellMotion
-	v.WindowTitle, v.ProgressBar = drawTitle(m.Status, m.Popup != nil)
+	v.WindowTitle, v.ProgressBar = drawTitle(m.Status, m.Status.State == "waiting for you", m.unseen, m.sessionName(), m.project())
 	w, h := m.Width, m.Height
 	m.zones, m.sel.text = nil, ""
 	if m.tooSmall() {
@@ -260,24 +259,34 @@ func drawSelection(c *lipgloss.Canvas, s selection, lit color.Color, out float64
 	return strings.Join(rows, "\n")
 }
 
-// drawTitle is the terminal's title and tab progress for the status: what claude does and how
-// many agents work, a spinning bar while they do, a warning bar while a popup waits.
-func drawTitle(st Status, asking bool) (string, *tea.ProgressBar) {
-	title := "claudit"
+// drawTitle is the terminal's title and tab progress: a mark for what claude does, the
+// conversation's name, else "claudit", and the project. A still dot and a spinning bar while
+// claude or its agents work (the bar turns by itself: the title is not written at every frame),
+// "?" and a warning bar while a question waits for the user, "✗" once claude has exited, and what
+// a turn that ended while the user was away left until they come back: "✓" for one that went
+// well, "!" for one that failed, or leaves an alert in the status line.
+func drawTitle(st Status, asking bool, unseen, name, project string) (string, *tea.ProgressBar) {
+	var mark string
 	var bar *tea.ProgressBar
 	switch {
 	case asking:
-		title += " · waiting for you"
-		bar = tea.NewProgressBar(tea.ProgressBarWarning, 100)
-	case st.Busy:
-		title += " · " + drawOneLine(st.State)
-		bar = tea.NewProgressBar(tea.ProgressBarIndeterminate, 0)
-	}
-	if st.Agents > 0 {
-		title += " · " + strconv.Itoa(st.Agents) + " agents"
-		if bar == nil {
-			bar = tea.NewProgressBar(tea.ProgressBarIndeterminate, 0)
+		mark, bar = "?", tea.NewProgressBar(tea.ProgressBarWarning, 100)
+	case st.State == "exited":
+		mark = titleExited
+	case st.Busy || st.Agents > 0:
+		mark, bar = titleBusy, tea.NewProgressBar(tea.ProgressBarIndeterminate, 0)
+	case unseen != "":
+		mark = unseen
+		if st.Alert {
+			mark = titleFailed
 		}
+	}
+	title := cmp.Or(titleText(name, titleName), "claudit")
+	if p := titleText(project, titleProject); p != "" {
+		title += " · " + p
+	}
+	if mark != "" {
+		title = mark + " " + title
 	}
 	return title, bar
 }
