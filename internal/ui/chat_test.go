@@ -270,6 +270,110 @@ func TestChatMarkdownWidth(t *testing.T) {
 	}
 }
 
+// A "! command" of claude's is found where it is drawn: every row of a fenced block whose first
+// line that says something starts with "!", its bar pink, the whole block its text; the cells of
+// an inline `! command`, pink too. Other code is not one.
+func TestChatMarkdownBangs(t *testing.T) {
+	lines, hits := drawMarkdownBangs("Log in:\n```bash\n\n! cd sub\nmake login\n\n```\nthen `! gh auth status` or `!= nil`\n```\ngit status\n```", 40)
+	want := []drawBangHit{{1, 0, 40, "! cd sub\nmake login"}, {2, 0, 40, "! cd sub\nmake login"}, {3, 0, 40, "! cd sub\nmake login"}, {4, 0, 40, "! cd sub\nmake login"}, {5, 5, 21, "! gh auth status"}}
+	if !slices.Equal(hits, want) {
+		t.Errorf("hits %+v, want %+v\n%s", hits, want, ansi.Strip(strings.Join(lines, "\n")))
+	}
+	if !strings.HasPrefix(lines[2], styleBang.Render("│ ")) || !strings.HasPrefix(lines[6], styleRule.Render("│ ")) {
+		t.Errorf("bars %q %q", lines[2], lines[6])
+	}
+	if !strings.Contains(lines[5], styleBang.Render(" gh")) || !strings.Contains(lines[5], styleCode.Render("!=")) {
+		t.Errorf("inline %q", lines[5])
+	}
+	if got := ansi.Strip(lines[5])[5:21]; got != "! gh auth status" {
+		t.Errorf("the inline command's cells hold %q", got)
+	}
+	// What the chat cannot show is not in the command: escape sequences, controls; a tab is.
+	if _, hits := drawMarkdownBangs("```\n! printf '\x1b[31m%s\t\x07' red\n```", 40); len(hits) != 1 || hits[0].text != "! printf '%s\t' red" {
+		t.Errorf("controls: %+v", hits)
+	}
+
+	// Wrapped, an inline command is found on each of its rows, the text whole on each; a word
+	// longer than a row too, cut.
+	cmd := "! gh auth login --hostname example.com --scopes repo,read:org,workflow,admin:public_key"
+	lines, hits = drawMarkdownBangs("Run `"+cmd+"` once.", 24)
+	if len(hits) < 3 {
+		t.Fatalf("hits %+v in\n%s", hits, ansi.Strip(strings.Join(lines, "\n")))
+	}
+	var drawn strings.Builder
+	for i, h := range hits {
+		if h.y != i || h.text != cmd {
+			t.Errorf("hit %d %+v", i, h)
+		}
+		drawn.WriteString(ansi.Strip(lines[h.y])[h.x0:h.x1])
+	}
+	if strings.ReplaceAll(drawn.String(), " ", "") != strings.ReplaceAll(cmd, " ", "") {
+		t.Errorf("the hits cover %q", drawn.String())
+	}
+}
+
+// Only where a click puts the command in the prompt, a reply's rows, is a "! command" pink; in a
+// popup, in what a command prints and in a table's cells it is code as any.
+func TestChatMarkdownBangsPinkWhereClicked(t *testing.T) {
+	pink := strings.Split(styleBang.Render("x"), "x")[0]
+	if pink == "" {
+		t.Fatal("no colour to tell")
+	}
+	src := "Run `! ls` or\n```\n! ls\n```\n\n| a | b |\n|---|---|\n| `! ls` | x |"
+	plain := map[string]string{
+		"drawMarkdown": strings.Join(drawMarkdown(src, 40), "\n"),
+		"command":      strings.Join(drawCommand(src, 40), "\n"),
+		"answer":       renderPopup(&BtwPopup{Question: "q", Answer: src}, 60, 20),
+		"plan":         renderPopup(&PermissionPopup{Tool: "ExitPlanMode", Detail: src}, 60, 20),
+	}
+	for name, got := range plain {
+		if strings.Contains(got, pink) || !strings.Contains(got, styleCode.Render(" ls")) || !strings.Contains(got, styleCode.Render("! ls")) {
+			t.Errorf("%s: pink where no click goes, or no code:\n%q", name, got)
+		}
+	}
+	lines, hits := drawMarkdownBangs(src, 40)
+	if len(hits) != 2 || !strings.Contains(lines[0], styleBang.Render("!")) || !strings.HasPrefix(lines[1], styleBang.Render("│ ")) {
+		t.Errorf("a reply: hits %+v\n%q", hits, lines)
+	}
+	table := strings.Join(lines[len(lines)-3:], "\n")
+	if strings.Contains(table, pink) || !strings.Contains(table, styleCode.Render("! ls")) {
+		t.Errorf("the table of a reply:\n%q", table)
+	}
+	if got := strings.Join(drawEntry(ChatEntry{Kind: AssistantEntry, Text: "Run `! ls`"}, 40), "\n"); !strings.Contains(got, pink) {
+		t.Errorf("a reply's inline command is not pink: %q", got)
+	}
+}
+
+// What a click puts in the prompt has no format characters (bidirectional controls, zero-width
+// marks), which reorder or hide what the user is about to run.
+func TestChatMarkdownBangsNoFormat(t *testing.T) {
+	_, hits := drawMarkdownBangs("```\n! echo \u202ehi\u202c \u2066x\u2069\u200b\n```\nor `! ls \u202e-la\u200b`", 40)
+	if len(hits) != 2 || hits[0].text != "! echo hi x" || hits[1].text != "! ls -la" {
+		t.Errorf("hits %+v", hits)
+	}
+}
+
+// A click on a reply's line finds its "! command" past the "› ", a long line cut short its whole
+// text; a Bash call's line or a prompt has none.
+func TestChatBangAt(t *testing.T) {
+	cmd := "! go test ./... -run TestChatBangAt -count 1 -v"
+	reply := ChatEntry{Kind: AssistantEntry, Text: "Run:\n\n```\n" + cmd + "\n```"} // the blank line is not drawn
+	if got := drawBangAt(reply, 30, 1, 10); got != cmd {
+		t.Errorf("the block's row gives %q", got)
+	}
+	if got := drawBangAt(reply, 30, 0, 3); got != "" {
+		t.Errorf("the line above gives %q", got)
+	}
+	if got := drawBangAt(reply, 30, 1, 1); got != "" {
+		t.Errorf("the gutter gives %q", got)
+	}
+	for _, e := range []ChatEntry{{Kind: UserEntry, Text: reply.Text}, {Kind: AssistantEntry, Text: "`! ls`", Bash: true}} {
+		if got := drawBangAt(e, 30, 1, 10) + drawBangAt(e, 30, 0, 3); got != "" {
+			t.Errorf("%+v gives %q", e, got)
+		}
+	}
+}
+
 func TestChatInput(t *testing.T) {
 	tests := []struct {
 		name    string

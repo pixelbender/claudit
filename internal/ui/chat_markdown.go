@@ -3,6 +3,7 @@ package ui
 import (
 	"regexp"
 	"strings"
+	"unicode"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -28,12 +29,42 @@ var (
 // lists, quotes, rules, tables, fenced code, and inline **bold**, *italic*, `code` and [links](url).
 // Source line breaks are kept; a fence that is still streaming counts as code to the end.
 func drawMarkdown(src string, w int) []string {
+	out, _ := drawMarkdownAs(src, w, false)
+	return out
+}
+
+// drawBangHit is a "! command" of claude's as drawn: cells x0 to x1 of line y; a click there
+// puts text in the prompt.
+type drawBangHit struct {
+	y, x0, x1 int
+	text      string
+}
+
+// drawMarkdownBangs is drawMarkdown with where the "! command"s went: a fenced block whose first
+// line that says something starts with "!", every row of it; an inline `! command`, the cells of
+// each part of it. A "!" block's bar is pink, as the shell mode's "!", and so is an inline one.
+// A table's cells have no hits, so their "! command"s are code as any.
+func drawMarkdownBangs(src string, w int) (out []string, hits []drawBangHit) {
+	return drawMarkdownAs(src, w, true)
+}
+
+// drawMarkdownAs is drawMarkdownBangs, or drawMarkdown when bangs is false: a place where a click
+// puts nothing in the prompt shows a "! command" as code, not pink.
+func drawMarkdownAs(src string, w int, bangs bool) (out []string, hits []drawBangHit) {
 	w = max(1, w)
-	var out []string
+	flow := func(spans []drawSpan, first, hang string) {
+		drawn, at := drawFlowBangs(spans, w, first, hang)
+		for _, h := range at {
+			h.y += len(out)
+			hits = append(hits, h)
+		}
+		out = append(out, drawn...)
+	}
 	lines := strings.Split(strings.Trim(src, "\n"), "\n")
 	for i := 0; i < len(lines); i++ {
 		line := strings.TrimRight(lines[i], " \r")
 		trimmed := strings.TrimSpace(line)
+		start, from := i, len(out)
 		switch {
 		case strings.HasPrefix(trimmed, "```"):
 			lang := strings.TrimSpace(strings.TrimPrefix(trimmed, "```"))
@@ -56,7 +87,7 @@ func drawMarkdown(src string, w int) []string {
 			out = append(out, drawTable(rows, w)...)
 		default:
 			if m := drawHeadingRe.FindStringSubmatch(trimmed); m != nil {
-				out = append(out, drawFlow(drawSpans(m[2], styleHeading), w, "", "")...)
+				flow(drawSpansAs(m[2], styleHeading, bangs), "", "")
 			} else if m := drawItemRe.FindStringSubmatch(line); m != nil {
 				indent := strings.Repeat(" ", min(len(m[1]), 8))
 				bullet := "• "
@@ -64,11 +95,21 @@ func drawMarkdown(src string, w int) []string {
 					bullet = m[2] + " "
 				}
 				first := indent + styleAccent.Render(bullet)
-				out = append(out, drawFlow(drawSpans(m[3], styleReply), w, first, indent+strings.Repeat(" ", ansi.StringWidth(bullet)))...)
+				flow(drawSpansAs(m[3], styleReply, bangs), first, indent+strings.Repeat(" ", ansi.StringWidth(bullet)))
 			} else if rest, ok := strings.CutPrefix(trimmed, ">"); ok {
-				out = append(out, drawFlow(drawSpans(strings.TrimSpace(rest), styleDim.Italic(true)), w, styleRule.Render("▏ "), styleRule.Render("▏ "))...)
+				flow(drawSpansAs(strings.TrimSpace(rest), styleDim.Italic(true), bangs), styleRule.Render("▏ "), styleRule.Render("▏ "))
 			} else {
-				out = append(out, drawFlow(drawSpans(line, styleReply), w, "", "")...)
+				flow(drawSpansAs(line, styleReply, bangs), "", "")
+			}
+		}
+		if bangs && strings.HasPrefix(trimmed, "```") {
+			if text, ok := drawFenceBang(lines[start+1 : min(i, len(lines))]); ok {
+				for y := from; y < len(out); y++ {
+					if rest, ok := strings.CutPrefix(out[y], styleRule.Render("│ ")); ok {
+						out[y] = styleBang.Render("│ ") + rest
+					}
+					hits = append(hits, drawBangHit{y: y, x0: 0, x1: w, text: text})
+				}
 			}
 		}
 	}
@@ -78,7 +119,25 @@ func drawMarkdown(src string, w int) []string {
 	for i, l := range out {
 		out[i] = drawTrunc(l, w) // a wide rune cannot be split when w is tiny
 	}
-	return out
+	return out, hits
+}
+
+// drawFenceBang is the command a fenced block of code holds when its first line that says
+// something starts with "!": the whole block as written, its blank lines around it trimmed and
+// its new lines kept; what the chat cannot show (escape sequences, other controls) goes, and the
+// format characters that reorder or hide what is written (bidirectional controls, zero-width).
+// A line that starts with a shell's negation ("! grep -q x file") is taken for a command: it
+// cannot be told from one.
+func drawFenceBang(block []string) (string, bool) {
+	text := strings.Map(func(r rune) rune {
+		if r != '\n' && r != '\t' && unicode.IsControl(r) {
+			return -1
+		}
+		return drawNoFormat(r)
+	}, ansi.Strip(strings.Join(block, "\n")))
+	text = strings.TrimSpace(text)
+	_, ok := bangCommand(text)
+	return text, ok
 }
 
 // drawTrunc cuts s to at most w cells, as drawFit does, without padding.
@@ -93,16 +152,22 @@ func drawTrunc(s string, w int) string {
 type drawSpan struct {
 	text string
 	st   lipgloss.Style
+	bang bool // an inline `! command`: a click on it puts its text in the prompt
 }
 
 // drawSpans splits one line of markdown into styled runs.
 func drawSpans(s string, base lipgloss.Style) []drawSpan {
+	return drawSpansAs(s, base, false)
+}
+
+// drawSpansAs is drawSpans with an inline `! command` marked, and pink, when bangs is set.
+func drawSpansAs(s string, base lipgloss.Style, bangs bool) []drawSpan {
 	s = drawOneLine(s)
 	var spans []drawSpan
 	var plain strings.Builder
 	flush := func() {
 		if plain.Len() > 0 {
-			spans = append(spans, drawSpan{plain.String(), base})
+			spans = append(spans, drawSpan{text: plain.String(), st: base})
 			plain.Reset()
 		}
 	}
@@ -110,19 +175,24 @@ func drawSpans(s string, base lipgloss.Style) []drawSpan {
 		rest := s[i:]
 		if j := drawClose(rest, "`", "`"); j > 0 {
 			flush()
-			spans = append(spans, drawSpan{rest[1:j], styleCode})
+			code := rest[1:j]
+			if bangs && drawInlineBang(code) {
+				spans = append(spans, drawSpan{text: code, st: styleBang, bang: true})
+			} else {
+				spans = append(spans, drawSpan{text: code, st: styleCode})
+			}
 			i += j + 1
 			continue
 		}
 		if j := drawClose(rest, "**", "**"); j > 0 {
 			flush()
-			spans = append(spans, drawSpans(rest[2:j], base.Foreground(theme.Strong))...)
+			spans = append(spans, drawSpansAs(rest[2:j], base.Foreground(theme.Strong), bangs)...)
 			i += j + 2
 			continue
 		}
 		if j := drawClose(rest, "*", "*"); j > 0 && rest[1] != ' ' {
 			flush()
-			spans = append(spans, drawSpans(rest[1:j], base.Italic(true))...)
+			spans = append(spans, drawSpansAs(rest[1:j], base.Italic(true), bangs)...)
 			i += j + 1
 			continue
 		}
@@ -130,7 +200,7 @@ func drawSpans(s string, base lipgloss.Style) []drawSpan {
 			if j := strings.Index(rest, "]("); j > 0 {
 				if k := strings.IndexByte(rest[j+2:], ')'); k >= 0 {
 					flush()
-					spans = append(spans, drawSpans(rest[1:j], base.Underline(true))...)
+					spans = append(spans, drawSpansAs(rest[1:j], base.Underline(true), bangs)...)
 					i += j + 2 + k + 1
 					continue
 				}
@@ -141,6 +211,21 @@ func drawSpans(s string, base lipgloss.Style) []drawSpan {
 	}
 	flush()
 	return spans
+}
+
+// drawNoFormat drops the format characters from a text, for strings.Map.
+func drawNoFormat(r rune) rune {
+	if unicode.Is(unicode.Cf, r) {
+		return -1
+	}
+	return r
+}
+
+// drawInlineBang reports whether inline code is a "! command": a "!", a blank, then the command.
+// A "!" right before what follows is more often code ("!= nil", "!ok") than a command.
+func drawInlineBang(code string) bool {
+	rest, ok := strings.CutPrefix(code, "!")
+	return ok && strings.HasPrefix(rest, " ") && strings.TrimSpace(rest) != ""
 }
 
 // drawClose returns the index in s of the closer of an opener at the start of s, or -1.
@@ -158,13 +243,18 @@ func drawClose(s, open, close string) int {
 // drawFlow word-wraps styled runs into lines of at most w cells; the first line starts with
 // first, the others with hang (both already styled).
 func drawFlow(spans []drawSpan, w int, first, hang string) []string {
+	lines, _ := drawFlowBangs(spans, w, first, hang)
+	return lines
+}
+
+// drawFlowBangs is drawFlow with where the parts of each "! command" span went.
+func drawFlowBangs(spans []drawSpan, w int, first, hang string) (lines []string, hits []drawBangHit) {
 	if ansi.StringWidth(first) >= w || ansi.StringWidth(hang) >= w {
 		first, hang = "", "" // no room for decoration
 	}
-	var lines []string
 	var line strings.Builder
 	prefix := first
-	used := ansi.StringWidth(prefix)
+	used, bangSpan := ansi.StringWidth(prefix), -1
 	line.WriteString(prefix)
 	newLine := func() {
 		lines = append(lines, line.String())
@@ -173,7 +263,18 @@ func drawFlow(spans []drawSpan, w int, first, hang string) []string {
 		line.WriteString(prefix)
 		used = ansi.StringWidth(prefix)
 	}
-	for _, sp := range spans {
+	for k, sp := range spans {
+		// mark notes cells x0 to x1 of the line being drawn as a part of a "! command" span.
+		mark := func(x0, x1 int) {
+			if !sp.bang || x1 <= x0 {
+				return
+			}
+			if n := len(hits); n > 0 && hits[n-1].y == len(lines) && hits[n-1].x1 == x0 && bangSpan == k {
+				hits[n-1].x1 = x1
+				return
+			}
+			hits, bangSpan = append(hits, drawBangHit{y: len(lines), x0: x0, x1: x1, text: strings.Map(drawNoFormat, sp.text)}), k
+		}
 		for _, word := range drawWords(sp.text) {
 			ww := ansi.StringWidth(word)
 			if used+ww > w && used > ansi.StringWidth(prefix) {
@@ -184,18 +285,20 @@ func drawFlow(spans []drawSpan, w int, first, hang string) []string {
 			for ww > w-used && ww > 0 { // a word longer than the line: cut it
 				head := drawTake(word, max(1, w-used))
 				line.WriteString(sp.st.Render(head))
+				mark(used, used+ansi.StringWidth(head))
 				word = word[len(head):]
 				ww = ansi.StringWidth(word)
 				newLine()
 			}
 			if word != "" {
 				line.WriteString(sp.st.Render(word))
+				mark(used, used+ww)
 				used += ww
 			}
 		}
 	}
 	lines = append(lines, line.String())
-	return lines
+	return lines, hits
 }
 
 // drawWords splits s before every space, so each word carries its leading spaces.

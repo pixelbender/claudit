@@ -184,13 +184,17 @@ func (m *Model) clickIDE(key string) tea.Cmd {
 	return nil
 }
 
-// clickChat acts on a press on a line of the chat, a Bash line of call ("" for another line): its
-// release, unless the press starts a selection, shows where main ran it in the IDE of o, w×h cells
-// (none when h is 0). The keys go back to the prompt.
-func (m *Model) clickChat(call string, o ideview.Options, w, h int) tea.Cmd {
+// clickChat acts on a press on a line of the chat, a Bash line of call or a ! command of claude's
+// ("" for another line): its release, unless the press starts a selection, shows where main ran
+// the call in the IDE of o, w×h cells (none when h is 0), or puts the command in the prompt. The
+// keys go back to the prompt.
+func (m *Model) clickChat(call, bang string, o ideview.Options, w, h int) tea.Cmd {
 	m.PanelFocus = false
 	m.onRelease = nil
-	if call != "" && h > 0 {
+	switch {
+	case bang != "":
+		m.onRelease = func() { m.takeBang(bang) }
+	case call != "" && h > 0:
 		m.onRelease = func() { m.showCall(call, o, w, h) }
 	}
 	return nil

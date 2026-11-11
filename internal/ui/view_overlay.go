@@ -107,6 +107,7 @@ var drawHelpRows = [][2]string{
 	{"ctrl+v", "paste the picture on the clipboard; drop picture files to attach them"},
 	{"↑ ↓", "previous prompts; queued prompts first, edited in their place"},
 	{"!", "a shell command, run in the project; claude gets it and its output and goes on"},
+	{"click a !", "a ! command in claude's reply goes into the prompt, to edit or send"},
 	{"/", "slash commands: ↑/↓ pick, tab complete, enter run; a typo is held back, enter again sends it"},
 	{"esc", "show every agent again, else stop a ! command, else interrupt claude, else clear the prompt, else quit (twice; confirms unfinished tasks)"},
 	{"shift+tab", "permission mode: manual → accept edits → plan → auto; over a request, also answers what the new mode allows"},
@@ -140,7 +141,7 @@ func renderHelp(maxWidth, maxHeight int) string {
 			continue
 		}
 		key := styleAccent.Render(drawFit(r[0], keyW))
-		lines = append(lines, drawFlow([]drawSpan{{r[1], styleFg}}, inner, "  "+key, strings.Repeat(" ", 2+keyW))...)
+		lines = append(lines, drawFlow([]drawSpan{{text: r[1], st: styleFg}}, inner, "  "+key, strings.Repeat(" ", 2+keyW))...)
 	}
 	lines = append(lines, "", styleDim.Render("esc close"))
 	if len(lines) > maxHeight-2 { // a short screen: no blank lines

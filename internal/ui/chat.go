@@ -101,10 +101,14 @@ func drawChatLines(cache *chatCache, entries []ChatEntry, tw, aw int) (lines, ti
 	return lines, times, owners
 }
 
+// chatRow is what a row of the chat draws: a line of an entry, by its index among the entry's
+// lines; entry -1 for none.
+type chatRow struct{ entry, line int }
+
 // renderChat draws the tail of the conversation, scrolled up by scroll lines, into exactly width×height cells:
 // each entry with the time it was said grey at the right of its first line. maxScroll is the largest
-// scroll that still shows something new; shown is the index of the entry each row draws, -1 for none.
-func renderChat(cache *chatCache, entries []ChatEntry, width, height, scroll int) (out string, maxScroll int, shown []int) {
+// scroll that still shows something new; shown is what each row draws.
+func renderChat(cache *chatCache, entries []ChatEntry, width, height, scroll int) (out string, maxScroll int, shown []chatRow) {
 	tw, aw := drawChatWidths(width)
 	lines, times, owners := drawChatLines(cache, entries, tw, aw)
 
@@ -112,15 +116,20 @@ func renderChat(cache *chatCache, entries []ChatEntry, width, height, scroll int
 	scroll = min(max(scroll, 0), maxScroll)
 	end := len(lines) - scroll
 	from := max(0, end-height)
-	rows, shown := make([]string, height), make([]int, height)
+	rows, shown := make([]string, height), make([]chatRow, height)
 	top := height - (end - from) // tail-aligned: short logs sit right above the input
 	for i := range rows {
 		var l string
-		shown[i] = -1
+		shown[i] = chatRow{entry: -1}
 		if i >= top {
-			l, shown[i] = "  "+lines[from+i-top], owners[from+i-top]
-			if at := times[from+i-top]; at != "" {
-				l = "  " + drawFit(lines[from+i-top], tw) + "  " + at
+			k := from + i - top
+			first := k // the entry's first line
+			for first > 0 && owners[first-1] == owners[k] {
+				first--
+			}
+			l, shown[i] = "  "+lines[k], chatRow{entry: owners[k], line: k - first}
+			if at := times[k]; at != "" {
+				l = "  " + drawFit(lines[k], tw) + "  " + at
 			}
 		}
 		rows[i] = drawFit(l, width)
@@ -165,7 +174,7 @@ func drawEntry(e ChatEntry, w int) []string {
 		if e.Bash {
 			lines = drawStyled(drawDense(drawWrap(e.Text, w-2)), styleBash.Render)
 		} else {
-			lines = drawDense(drawMarkdown(e.Text, w-2))
+			lines, _ = drawReply(e.Text, w-2)
 		}
 		for i, l := range lines {
 			gutter := "  "
@@ -193,6 +202,38 @@ func drawEntry(e ChatEntry, w int) []string {
 		return []string{"  " + lipgloss.NewStyle().Foreground(drawAgentColor(0)).Render(e.Text)}
 	}
 	return nil
+}
+
+// drawReply renders a reply of claude's into lines of at most w cells: markdown, no line blank;
+// with where its "! command"s went.
+func drawReply(text string, w int) ([]string, []drawBangHit) {
+	lines, hits := drawMarkdownBangs(text, w)
+	dense, at := make([]string, 0, len(lines)), make([]int, len(lines)) // at: where each line went
+	for i, l := range lines {
+		at[i] = len(dense)
+		if strings.TrimSpace(ansi.Strip(l)) != "" {
+			dense = append(dense, l)
+		}
+	}
+	for i := range hits {
+		hits[i].y = at[hits[i].y]
+	}
+	return dense, hits
+}
+
+// drawBangAt is the "! command" of claude's that entry e, drawn w cells wide, shows at cell x of
+// its line y; "" for none. A Bash call's line and a prompt have none.
+func drawBangAt(e ChatEntry, w, y, x int) string {
+	if e.Kind != AssistantEntry || e.Bash || strings.TrimSpace(e.Text) == "" {
+		return ""
+	}
+	_, hits := drawReply(e.Text, w-2)
+	for _, h := range hits {
+		if h.y == y && x-2 >= h.x0 && x-2 < h.x1 { // past the "› "
+			return h.text
+		}
+	}
+	return ""
 }
 
 // drawBang renders a ! command as typed after a "!", then what it printed under a "⎿", as Claude

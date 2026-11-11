@@ -125,12 +125,12 @@ func (m *Model) View() tea.View {
 	m.chatMax = chatMax
 	if tw, _ := drawChatWidths(w); chatH > 0 { // the text past the "›", short of the times
 		m.zones = append(m.zones, zone{y: ideH, w: w, h: chatH,
-			click: func(_, y int) tea.Cmd {
-				call := "" // a Bash line's: a click shows where it ran
-				if i := shown[y]; i >= 0 {
-					call = entries[i].Call
+			click: func(x, y int) tea.Cmd {
+				call, bang := "", "" // a Bash line's: a click shows where it ran; a ! command's: it goes into the prompt
+				if r := shown[y]; r.entry >= 0 {
+					call, bang = entries[r.entry].Call, drawBangAt(entries[r.entry], tw, r.line, x-2)
 				}
-				return m.clickChat(call, o, w, ideH)
+				return m.clickChat(call, bang, o, w, ideH)
 			},
 			text: func(int, int) image.Rectangle { return image.Rect(4, 0, 2+tw, chatH) }})
 	}

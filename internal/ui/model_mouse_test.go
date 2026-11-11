@@ -15,6 +15,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/pixelbender/claudit/internal/history"
 	"github.com/pixelbender/claudit/internal/ide"
 	"github.com/pixelbender/claudit/internal/ideview"
 	"github.com/pixelbender/claudit/internal/protocol"
@@ -586,6 +587,109 @@ func TestViewDimsUnderPopup(t *testing.T) {
 	_, y = modelMouseAt(t, m, "send the prompt")
 	if line := strings.Split(m.View().Content, "\n")[y]; !strings.Contains(line, sgr(theme.Accent)) {
 		t.Errorf("the help faded: %q", line)
+	}
+}
+
+// A click on a ! command in claude's reply puts it in the prompt, the shell mode on, to edit or
+// send: a fenced block's whole text, an inline one's whole line however it wraps, the blank after
+// the "!" gone as if typed. What the prompt
+// said goes to the kill buffer and the history is no longer browsed. A click on a prompt, a drag,
+// or a popup opened before the release puts nothing.
+func TestModelMouseClickBang(t *testing.T) {
+	m, sent := modelMouseNew(t)
+	long := "! gh auth login --hostname git.example.com --scopes repo,read:org,workflow --web"
+	m.Chat = []ChatEntry{
+		{Kind: UserEntry, Text: "how do I log in? `! gh auth status`"},
+		{Kind: AssistantEntry, Text: "Run this:\n```\n! gcloud auth login\n```\nor, on the other host, `" + long + "` instead."},
+	}
+	m.history, m.histAt = []history.Entry{{Text: "earlier"}}, 1
+	m.Update(inputKey("up"))
+	if !m.browsing() || string(m.Input.Text) != "earlier" {
+		t.Fatalf("recalled %q", string(m.Input.Text))
+	}
+
+	modelMouseClick(t, m, "gcloud auth login")
+	if got := string(m.Input.Text); got != "!gcloud auth login" || m.Input.Cursor != len(m.Input.Text) || !bangInput(m.Input.Text) || m.browsing() {
+		t.Fatalf("prompt %q, cursor %d, browsing %v", got, m.Input.Cursor, m.browsing())
+	}
+	if !strings.Contains(m.View().Content, styleBang.Render("! ")) {
+		t.Error("the prompt is not in the shell mode")
+	}
+	m.Update(inputKey("ctrl+y"))
+	if got := string(m.Input.Text); got != "!gcloud auth loginearlier" || len(*sent) != 0 {
+		t.Errorf("ctrl+y: prompt %q, sent %#v", got, *sent)
+	}
+
+	m.Input = Input{}
+	modelMouseClick(t, m, "gh auth status") // the user's own prompt
+	if len(m.Input.Text) != 0 {
+		t.Errorf("a click on a prompt put %q", string(m.Input.Text))
+	}
+	x, y := modelMouseAt(t, m, "! gh auth login")
+	m.Update(tea.MouseClickMsg{X: x - 1, Y: y, Button: tea.MouseLeft}) // the blank before it
+	m.Update(tea.MouseReleaseMsg{X: x - 1, Y: y, Button: tea.MouseLeft})
+	if len(m.Input.Text) != 0 {
+		t.Errorf("a click beside the command put %q", string(m.Input.Text))
+	}
+
+	m.Update(tea.WindowSizeMsg{Width: 50, Height: 30})
+	x, y = modelMouseAt(t, m, "workflow") // a row the command wraps to
+	m.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+	m.Update(tea.MouseMotionMsg{X: x + 3, Y: y, Button: tea.MouseLeft})
+	m.View()
+	m.Update(tea.MouseReleaseMsg{X: x + 3, Y: y, Button: tea.MouseLeft})
+	if len(m.Input.Text) != 0 {
+		t.Errorf("a drag put %q", string(m.Input.Text))
+	}
+	modelMouseClick(t, m, "workflow")
+	if got := string(m.Input.Text); got != "!"+long[2:] {
+		t.Errorf("the wrapped command gave %q", got)
+	}
+
+	m.Input = Input{}
+	x, y = modelMouseAt(t, m, "gcloud auth login")
+	m.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+	modelEvents(m, protocol.PermissionRequest{RequestID: "p1", ToolName: "Bash", Input: map[string]any{"command": "ls"}})
+	m.Update(tea.MouseReleaseMsg{X: x, Y: y, Button: tea.MouseLeft})
+	if m.View(); len(m.Input.Text) != 0 {
+		t.Errorf("a release under a popup put %q", string(m.Input.Text))
+	}
+	modelMouseClick(t, m, "gcloud auth login")
+	if len(m.Input.Text) != 0 || m.Popup == nil {
+		t.Errorf("a click under a popup put %q", string(m.Input.Text))
+	}
+}
+
+// A click on a ! command while a queued prompt is being edited and claude's turn has ended does
+// not send the queue: the prompt holds the command, the queued prompt stays as it was and goes
+// after a quiet period of its own.
+func TestModelMouseClickBangKeepsQueue(t *testing.T) {
+	m, sent := modelMouseNew(t)
+	m.Status.Busy, m.Status.State = true, "thinking"
+	for _, p := range []string{"Fix it", "And the docs"} {
+		modelPress(m, inputTyped(p)...)
+		modelPress(m, inputKey("enter"))
+	}
+	modelPress(m, inputKey("up"), inputKey("up")) // "Fix it" is in the prompt
+	if m.queueAt != 0 || string(m.Input.Text) != "Fix it" {
+		t.Fatalf("queueAt %d, prompt %q", m.queueAt, string(m.Input.Text))
+	}
+	modelEvents(m, protocol.TextStart{}, protocol.TextDelta{Text: "Run `! ls -la`"}, protocol.Result{}) // the turn ends
+	if len(*sent) != 0 {
+		t.Fatalf("the turn's end sent %#v", *sent)
+	}
+	modelAt(m, 10*time.Second)
+	modelMouseClick(t, m, "ls -la")
+	if len(*sent) != 0 || !slices.Equal(m.pending, []string{"Fix it", "And the docs"}) || string(m.Input.Text) != "!ls -la" || m.queueAt != -1 {
+		t.Fatalf("sent %#v, pending %q, prompt %q, queueAt %d", *sent, m.pending, string(m.Input.Text), m.queueAt)
+	}
+	m.Update(tickMsg(modelT0.Add(14999 * time.Millisecond)))
+	if len(*sent) != 0 {
+		t.Fatalf("the queue went at once: %#v", *sent)
+	}
+	m.Update(tickMsg(modelT0.Add(15 * time.Second)))
+	if len(*sent) != 1 || modelUserText((*sent)[0]) != "Fix it\n\nAnd the docs" || string(m.Input.Text) != "!ls -la" {
+		t.Errorf("sent %#v, prompt %q", *sent, string(m.Input.Text))
 	}
 }
 
